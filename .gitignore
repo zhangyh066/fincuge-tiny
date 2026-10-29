@@ -40,11 +40,12 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 
-# ── 模型权重 ──
+# ── 模型权重：仓库内的 weights/ 例外，其余训练产物不入库 ──
 *.safetensors
 *.bin
 *.pt
 *.pth
+!weights/**/*.safetensors
 
 # ── 系统 ──
 .DS_Store
