@@ -46,28 +46,30 @@
 
 ## 预训练权重
 
-三个 adapter 已经放在 `weights/`，共 58MB，clone 下来不用重训就能用：
+三个 adapter 放在 [Releases v0.1.0](https://github.com/zhangyh066/fincuge-tiny/releases/tag/v0.1.0)，共 58MB，下载后不用重训就能用：
 
-| 目录 | 任务 | 评估结果 |
+| 文件 | 任务 | 评估结果 |
 |---|---|---|
-| `weights/emotion` | 情绪三分类 | 2,020 条上 76.3% |
-| `weights/newscat` | 新闻七分类 | 884 条上 89.7% |
-| `weights/entity` | 事件主体抽取 | 1,464 条上 86.1% |
+| `emotion_adapter.safetensors` + `emotion_adapter_config.json` | 情绪三分类 | 2,020 条上 76.3% |
+| `newscat_adapter.safetensors` + `newscat_adapter_config.json` | 新闻七分类 | 884 条上 89.7% |
+| `entity_adapter.safetensors` + `entity_adapter_config.json` | 事件主体抽取 | 1,464 条上 86.1% |
 
-直接用：
+两个文件放进同一个目录（比如 `weights/entity/`），然后直接指过去：
 
 ```
 python eval_entity.py --adapter weights/entity
 ```
 
-或者在代码里：
+`harness.py` 会自动在 `weights/{emotion,newscat,entity}` 下找权重，放好了就能直接用：
 
 ```python
 from harness import Harness
 
-h = Harness()          # 自动优先加载 weights/ 下的三个 adapter
+h = Harness()
 h.answer("这家公司业绩暴雷，投资者情绪一片悲观")
 ```
+
+只想自己训练的话可以跳过这一节，脚本会从零训出同样的 adapter。
 
 ## 安装
 
@@ -219,14 +221,20 @@ h.answer("这家公司业绩暴雷，投资者情绪一片悲观")
 ├── eval_entity.py       # 主体抽取评估：抽实体 + 严格 / 宽松匹配 + F1 + 幻觉率
 ├── harness.py           # Agent 外壳：路由 + 校验 + 三档判定 + 日志
 ├── calibrate.py         # 阈值标定：覆盖率-准确率曲线
-├── weights/             # 三个 adapter 权重（58MB）
 ├── data/fincuge/        # 三个任务的数据（约 15MB）
 └── assets/results.svg   # 结果图
 ```
 
+## 文档
+
+- [从零微调教程](docs/教程-从零微调.md)：从装环境到训练、评估、封成 agent，每步都有命令和"该看到什么"
+- [Agent harness 设计](AGENT_HARNESS.md)：六层结构、校验规则、阈值定法、重试策略
+- [对标成熟方案与提升空间](docs/agent-对标与提升.md)：级联决策、约束解码、置信度校准，以及我们还差什么
+- [数据来源](data/SOURCES.md)：仓库内的数据和没放进来的第三方语料各来自哪里
+
 ## Roadmap
 
-- [x] 三个 adapter 随仓库提供（`weights/`，共 58MB），下载即用
+- [x] 三个 adapter 打包成 [Release v0.1.0](https://github.com/zhangyh066/fincuge-tiny/releases/tag/v0.1.0) 附件（58MB），下载即用
 - [ ] 新闻任务改受限 softmax：只读 7 个标签 token 的概率，比生成式快，且能直接得到置信度
 - [x] harness 的阈值在回归集上标定（情绪 2,020 / 新闻 884 / 主体 1,464 条）
 - [ ] 批量推理接口：同一批请求按任务分组，减少 adapter 切换
