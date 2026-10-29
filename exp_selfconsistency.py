@@ -33,7 +33,36 @@ TEMP = 0.7
 LOW_CONF = 0.89
 
 
+class _Tee:
+    """同时写控制台和日志文件，避免依赖 PowerShell 的 Tee-Object（编码不可控）"""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, s):
+        for st in self.streams:
+            try:
+                st.write(s)
+                if "\n" in s:
+                    st.flush()
+            except Exception:
+                pass
+
+    def flush(self):
+        for st in self.streams:
+            try:
+                st.flush()
+            except Exception:
+                pass
+
+
 def main():
+    os.makedirs("D:/ai/logs", exist_ok=True)
+    try:
+        _log = open("D:/ai/logs/exp_sc_run.log", "a", encoding="utf-8")
+        sys.stdout = _Tee(sys.__stdout__, _log)
+    except Exception as e:
+        print(f"[提示] 日志文件写不了（{e}），只输出到控制台")
     rows = json.load(open(EVAL, encoding="utf-8"))
     idx = sorted(random.Random(0).sample(range(len(rows)), N))
 
