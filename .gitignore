@@ -1,0 +1,53 @@
+# ── 数据：随仓库一起提供（约 15MB），版权归原项目，仅用于研究复现 ──
+#   不忽略 data/，否则别人 clone 下来跑不了
+#   但第三方语料（LIMA / COIG / 原始 parquet）不入库：体积大且有各自许可
+data/candidates/
+data/alpaca_zh_51k.json
+downloads/
+models/
+
+# ── 训练产物与日志：体积大，且含真实新闻原文 ──
+out/
+logs/
+hf/
+torch/
+tmp/
+pip-cache/
+uv-cache/
+uv-tools/
+uv-python/
+venv/
+
+# ── 本机专用文件（环境变量、启动器、内部笔记）──
+env.bat
+run_*.py
+run_*.sh
+*.bat
+HANDOFF.md
+原理笔记.md
+中性类错误分析.txt
+jobs_*.sh
+job_*.sh
+本地环境笔记.md
+项目主文档.md
+实验结果-*.md
+明天继续_待办.txt
+交接文档_*.txt
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# ── 模型权重 ──
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# ── 系统 ──
+.DS_Store
+Thumbs.db
+微调教程.html
+*.html

@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="300" viewBox="0 0 720 300" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect width="720" height="300" fill="#ffffff"/>
+
+  <text x="24" y="30" font-size="15" font-weight="600" fill="#1f2328">零样本基座 vs LoRA 微调 · 同一评估集</text>
+
+  <!-- legend -->
+  <rect x="470" y="18" width="12" height="12" fill="#b6bcc4" rx="2"/>
+  <text x="488" y="28" font-size="12" fill="#57606a">基座</text>
+  <rect x="536" y="18" width="12" height="12" fill="#e0672a" rx="2"/>
+  <text x="554" y="28" font-size="12" fill="#57606a">微调后</text>
+
+  <!-- gridlines -->
+  <g stroke="#eaecef" stroke-width="1">
+    <line x1="60" y1="240" x2="690" y2="240"/>
+    <line x1="60" y1="190" x2="690" y2="190"/>
+    <line x1="60" y1="140" x2="690" y2="140"/>
+    <line x1="60" y1="90"  x2="690" y2="90"/>
+    <line x1="60" y1="40"  x2="690" y2="40"/>
+  </g>
+  <g font-size="11" fill="#8c959f" text-anchor="end">
+    <text x="52" y="244">0</text>
+    <text x="52" y="194">25</text>
+    <text x="52" y="144">50</text>
+    <text x="52" y="94">75</text>
+    <text x="52" y="44">100</text>
+  </g>
+
+  <!-- group 1: emotion -->
+  <rect x="110" y="143.4" width="44" height="96.6" fill="#b6bcc4" rx="3"/>
+  <rect x="162" y="89.6"  width="44" height="150.4" fill="#e0672a" rx="3"/>
+  <text x="132" y="136" font-size="12" fill="#57606a" text-anchor="middle">48.3</text>
+  <text x="184" y="82"  font-size="12" font-weight="600" fill="#b8501c" text-anchor="middle">75.2</text>
+  <text x="158" y="262" font-size="13" fill="#1f2328" text-anchor="middle">情绪三分类</text>
+
+  <!-- group 2: news -->
+  <rect x="330" y="187.2" width="44" height="52.8" fill="#b6bcc4" rx="3"/>
+  <rect x="382" y="60.6"  width="44" height="179.4" fill="#e0672a" rx="3"/>
+  <text x="352" y="180" font-size="12" fill="#57606a" text-anchor="middle">26.4</text>
+  <text x="404" y="53"  font-size="12" font-weight="600" fill="#b8501c" text-anchor="middle">89.7</text>
+  <text x="378" y="262" font-size="13" fill="#1f2328" text-anchor="middle">新闻七分类</text>
+
+  <!-- group 3: entity -->
+  <rect x="550" y="238" width="44" height="2" fill="#b6bcc4" rx="1"/>
+  <rect x="602" y="67.8" width="44" height="172.2" fill="#e0672a" rx="3"/>
+  <text x="572" y="232" font-size="12" fill="#57606a" text-anchor="middle">0.5</text>
+  <text x="624" y="60"  font-size="12" font-weight="600" fill="#b8501c" text-anchor="middle">86.1</text>
+  <text x="598" y="262" font-size="13" fill="#1f2328" text-anchor="middle">事件主体抽取</text>
+
+  <text x="24" y="288" font-size="11" fill="#8c959f">评估集：情绪 2,020 条 / 新闻 884 条 / 主体抽取 1,464 条。单卡 GTX 1650（4GB），LoRA 0.84% 参数，峰值显存 1.55GB。</text>
+</svg>
