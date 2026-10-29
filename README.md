@@ -88,6 +88,8 @@ python eval_verbalizer.py --limit 0 --adapter out/adapter-emotion --batch 4
 
 这些文件由 FinCUGE 原始数据转换而来，版权归 BBT-Fin / FinCUGE 原项目，放在这里只为便于复现，请遵循原项目许可，勿作商用。需要从原始数据重做时再执行 `prepare_fincuge.py` 和 `prepare_newscat7.py`。
 
+早期筛选数据时用过的第三方语料（LIMA、COIG-PC、CAIL2018、中文 Alpaca 51k）没放进仓库，各自的下载地址见 [data/SOURCES.md](data/SOURCES.md)。
+
 ## 三个任务
 
 ### 情绪三分类
