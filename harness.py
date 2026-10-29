@@ -34,8 +34,25 @@ from peft import PeftModel
 from prompt_util import build_user_text      # 提示词唯一真源
 from train_sft import extract_entity, entity_match   # 判定唯一真源
 
-BASE = "D:/ai/models/Qwen3-0.6B"
+BASE = os.environ.get("QWEN_MODEL") or ("D:/ai/models/Qwen3-0.6B" if os.path.isdir("D:/ai/models/Qwen3-0.6B") else "Qwen/Qwen3-0.6B")
 TRACE = "D:/ai/logs/harness_trace.jsonl"
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# adapter 优先用仓库内的 weights/，clone 下来就能跑；找不到再退回本地训练产物
+ADAPTER_FALLBACK = {
+    "emotion": ["out/adapter-emotion-vb", "out/adapter-emotion-16k"],
+    "newscat": ["out/adapter-newscat"],
+    "entity": ["out/adapter-entity"],
+}
+
+
+def resolve_adapter(task, primary):
+    for c in [primary] + ADAPTER_FALLBACK.get(task, []):
+        p = c if os.path.isabs(c) else os.path.join(HERE, c)
+        if os.path.exists(os.path.join(p, "adapter_config.json")):
+            return p
+    return primary
 
 EVAL_FILES = {
     "emotion": "D:/ai/data/fincuge/emotion_eval.json",
@@ -66,7 +83,7 @@ NEWS_ALIAS = {
 #   这里放一个通用兜底并在结果里打 flag=instruction_synthesized。
 SKILLS = {
     "emotion": {
-        "adapter": "D:/ai/out/adapter-emotion-vb",
+        "adapter": "weights/emotion",
         "mode": "restricted",
         "instruction": "判断以下句子的情感属性。",
         # 实测（2,020 条）：≥0.90 覆盖 37.0%、该档 94.3%；≥0.95 覆盖 21.7%、95.7%。
@@ -74,7 +91,7 @@ SKILLS = {
         "hi": 0.90, "lo": 0.50, "calibrated": True,
     },
     "newscat": {
-        "adapter": "D:/ai/out/adapter-newscat",
+        "adapter": "weights/newscat",
         "mode": "generate",
         "max_new": 16,
         "instruction": "针对以下新闻进行分类，类别包括：公司、新冠、经济、行业、大盘、政策、其它。请直接回答类别名称。",
@@ -83,7 +100,7 @@ SKILLS = {
         "hi": 0.95, "lo": 0.50, "calibrated": True,
     },
     "entity": {
-        "adapter": "D:/ai/out/adapter-entity",
+        "adapter": "weights/entity",
         "mode": "generate",
         "max_new": 24,
         "instruction": "分析以下新闻，抽取相关事件的主体信息。",
@@ -152,10 +169,11 @@ class Harness:
         )
         # 三个 adapter 全部挂上（LoRA 权重每个约 10MB，4GB 卡装得下），按请求切换
         names = list(SKILLS)
-        self.model = PeftModel.from_pretrained(base, SKILLS[names[0]]["adapter"],
+        self.paths = {n: resolve_adapter(n, SKILLS[n]["adapter"]) for n in names}
+        self.model = PeftModel.from_pretrained(base, self.paths[names[0]],
                                               adapter_name=names[0])
         for n in names[1:]:
-            self.model.load_adapter(SKILLS[n]["adapter"], adapter_name=n)
+            self.model.load_adapter(self.paths[n], adapter_name=n)
         self.model.eval()
         self.has_think = "enable_thinking" in (self.tok.chat_template or "")
         self._cur = None

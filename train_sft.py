@@ -40,7 +40,7 @@ except ImportError:                            # 从别的目录被调用时兜�
 # ============================================================
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--model", default="D:/ai/models/Qwen3-0.6B")
+    p.add_argument("--model", default=os.environ.get("QWEN_MODEL") or ("D:/ai/models/Qwen3-0.6B" if os.path.isdir("D:/ai/models/Qwen3-0.6B") else "Qwen/Qwen3-0.6B"))
     p.add_argument("--data_path", default="D:/ai/data/alpaca_zh_51k.json")
     p.add_argument("--num_samples", type=int, default=3000)
 

@@ -43,7 +43,7 @@ from peft import PeftModel
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from prompt_util import build_user_text   # 提示词唯一真源，和训练共用
 
-BASE = "D:/ai/models/Qwen3-0.6B"
+BASE = os.environ.get("QWEN_MODEL") or ("D:/ai/models/Qwen3-0.6B" if os.path.isdir("D:/ai/models/Qwen3-0.6B") else "Qwen/Qwen3-0.6B")
 ADAPTER = "D:/ai/out/adapter-emotion"
 EVAL_JSON = "D:/ai/data/fincuge/emotion_eval.json"
 

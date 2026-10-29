@@ -35,7 +35,7 @@ from peft import PeftModel
 from prompt_util import build_user_text
 from train_sft import extract_entity, entity_match
 
-BASE = "D:/ai/models/Qwen3-0.6B"
+BASE = os.environ.get("QWEN_MODEL") or ("D:/ai/models/Qwen3-0.6B" if os.path.isdir("D:/ai/models/Qwen3-0.6B") else "Qwen/Qwen3-0.6B")
 EVAL_JSON = "D:/ai/data/fincuge/entity_eval.json"
 
 
