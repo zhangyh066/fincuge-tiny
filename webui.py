@@ -80,8 +80,8 @@ PAGE = r"""<!DOCTYPE html>
   .bars{display:flex;flex-direction:column;gap:7px;margin-top:10px}
   .bar{display:flex;align-items:center;gap:9px;font-size:12px}
   .bar .name{width:34px;color:var(--muted)}
-  .bar .track{flex:1;height:8px;background:#eef0f3;border-radius:99px;overflow:hidden}
-  .bar .fill{height:100%;background:var(--brand);border-radius:99px}
+  .bar .track{flex:1;display:block;height:8px;background:#eef0f3;border-radius:99px;overflow:hidden}
+  .bar .fill{display:block;height:100%;background:var(--brand);border-radius:99px}
   .bar .val{width:48px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
   .flags{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap}
   .flag{font-size:11px;color:var(--muted);background:#f1f3f5;border-radius:6px;padding:3px 7px}
@@ -186,9 +186,7 @@ function render(host, d){
   host.innerHTML = html; host.classList.add('show');
 }
 
-document.querySelectorAll('button[data-run]').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    const task = btn.dataset.run;
+async function runTask(task, btn) {
     const ta = document.getElementById('t-' + task);
     const out = document.getElementById('o-' + task);
     const text = ta.value.trim();
@@ -210,8 +208,25 @@ document.querySelectorAll('button[data-run]').forEach(btn => {
     }finally{
       btn.disabled = false; btn.textContent = task === 'emotion' ? '判断情绪' : (task === 'newscat' ? '判断类别' : '抽取主体');
     }
-  });
+}
+
+document.querySelectorAll('button[data-run]').forEach(btn => {
+  btn.addEventListener('click', () => runTask(btn.dataset.run, btn));
 });
+
+// 截图/演示模式：?demo=emotion|newscat|entity，自动填样例并真实调一次接口
+const DEMO_TEXT = {
+  emotion: '公司发布业绩预告，预计净利润同比增长120%，远超市场预期。',
+  newscat: '证监会发布新规，进一步规范上市公司信息披露行为。',
+  entity: '某某平台因涉嫌非法集资被警方立案侦查，涉案金额超10亿元。'
+};
+const demo = new URLSearchParams(location.search).get('demo');
+if (demo && DEMO_TEXT[demo]) {
+  document.querySelector('.tab[data-p="' + demo + '"]').click();
+  document.getElementById('t-' + demo).value = DEMO_TEXT[demo];
+  if (demo === 'entity') sel.value = '涉嫌非法集资';
+  runTask(demo, document.querySelector('button[data-run="' + demo + '"]'));
+}
 </script>
 </body>
 </html>
@@ -231,19 +246,21 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        path = self.path.split("?", 1)[0]      # 去掉 ?demo=xxx 这类查询串
+        if path in ("/", "/index.html"):
             page = PAGE.replace("__EVENTS__", json.dumps(EVENT_TYPES, ensure_ascii=False))
             self._send(200, page, "text/html; charset=utf-8")
-        elif self.path == "/api/health":
+        elif path == "/api/health":
             self._send(200, json.dumps({"ok": H is not None}))
         else:
             self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        if not self.path.startswith("/api/"):
+        path = self.path.split("?", 1)[0]
+        if not path.startswith("/api/"):
             self._send(404, json.dumps({"error": "not found"}))
             return
-        task = self.path.split("/")[-1]
+        task = path.split("/")[-1]
         try:
             n = int(self.headers.get("Content-Length", 0))
             payload = json.loads(self.rfile.read(n) or b"{}")
