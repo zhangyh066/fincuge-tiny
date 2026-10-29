@@ -37,6 +37,10 @@ from train_sft import extract_entity, entity_match   # 判定唯一真源
 BASE = os.environ.get("QWEN_MODEL") or ("D:/ai/models/Qwen3-0.6B" if os.path.isdir("D:/ai/models/Qwen3-0.6B") else "Qwen/Qwen3-0.6B")
 TRACE = "D:/ai/logs/harness_trace.jsonl"
 
+# 输入长度上限：超过就截断并打 flag（训练数据 P99 只有 201 token，
+# 真实新闻可能长得多，静默超长会直接掉准确率）
+MAX_INPUT_TOKENS = 448
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # adapter 优先用仓库内的 weights/，clone 下来就能跑；找不到再退回本地训练产物
@@ -272,8 +276,14 @@ class Harness:
     # ---------- 主入口 ----------
     def answer(self, text=None, task_hint=None, row=None, instruction=None):
         t0 = time.time()
+        truncated = False
         if row is None:
             body = clean_input(text)
+            n_tok = len(self.tok.encode(body, add_special_tokens=False))
+            if n_tok > MAX_INPUT_TOKENS:
+                ids = self.tok.encode(body, add_special_tokens=False)[:MAX_INPUT_TOKENS]
+                body = self.tok.decode(ids, skip_special_tokens=True)
+                truncated = True
             if not body:
                 return self._reject("empty_input", t0, None, 0.0, "输入为空")
             task, rconf, reason = (task_hint, 1.0, "上游指定任务") if task_hint else route(body)
@@ -308,6 +318,8 @@ class Harness:
                 detail = {}
 
         ok, flags = self._validate(task, pred, row, raw)
+        if truncated:
+            flags.append("input_truncated")
         if synthesized:
             flags.append("instruction_synthesized")
         if not cfg["calibrated"]:
@@ -325,6 +337,7 @@ class Harness:
 
         res = {
             "task": task,
+            "schema_valid": ok,
             "answer": pred if ok else "我不确定",
             "raw": raw[:120],
             "confidence": round(float(conf), 4),
