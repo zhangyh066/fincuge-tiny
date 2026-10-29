@@ -56,3 +56,6 @@ Thumbs.db
 # ── 权重与发布附件：走 GitHub Release，不进 git 历史 ──
 weights/
 dist/
+
+# 通用启动器（相对路径，别人 clone 后可直接双击）
+!start_webui.bat
