@@ -44,6 +44,31 @@
 
 能确定的是：把参数量压到 0.6B、显存压到 4GB、训练 3 小时，这个任务上的表现进入了 7B 级金融专用模型的区间。
 
+## 预训练权重
+
+三个 adapter 已经放在 `weights/`，共 58MB，clone 下来不用重训就能用：
+
+| 目录 | 任务 | 评估结果 |
+|---|---|---|
+| `weights/emotion` | 情绪三分类 | 2,020 条上 76.3% |
+| `weights/newscat` | 新闻七分类 | 884 条上 89.7% |
+| `weights/entity` | 事件主体抽取 | 1,464 条上 86.1% |
+
+直接用：
+
+```
+python eval_entity.py --adapter weights/entity
+```
+
+或者在代码里：
+
+```python
+from harness import Harness
+
+h = Harness()          # 自动优先加载 weights/ 下的三个 adapter
+h.answer("这家公司业绩暴雷，投资者情绪一片悲观")
+```
+
 ## 安装
 
 ```
@@ -51,6 +76,8 @@ pip install -r requirements.txt
 ```
 
 torch 要按本机 CUDA 版本装，例如 `pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118`。
+
+基线模型默认读 `D:/ai/models/Qwen3-0.6B`，本地没有就自动从 HuggingFace 拉 `Qwen/Qwen3-0.6B`；也可以用环境变量 `QWEN_MODEL` 指定别的路径。
 
 ## 快速开始
 
@@ -181,9 +208,25 @@ h.answer("这家公司业绩暴雷，投资者情绪一片悲观")
 
 配合 batch 2、梯度累积 4、梯度检查点，稳定跑在 1.55GB。实现上主要在 `train_sft.py` 的 `answer_only_loss()` 和 `--fast_loss` 开关。
 
+## 目录结构
+
+```
+.
+├── train_sft.py         # 训练：LoRA + 只对答案算 loss + 梯度累积 / 检查点
+├── prompt_util.py       # 提示词拼装的唯一真源
+├── eval_verbalizer.py   # 情绪评估：受限 softmax
+├── eval_multi.py        # 新闻评估：生成式 + 标签别名解析
+├── eval_entity.py       # 主体抽取评估：抽实体 + 严格 / 宽松匹配 + F1 + 幻觉率
+├── harness.py           # Agent 外壳：路由 + 校验 + 三档判定 + 日志
+├── calibrate.py         # 阈值标定：覆盖率-准确率曲线
+├── weights/             # 三个 adapter 权重（58MB）
+├── data/fincuge/        # 三个任务的数据（约 15MB）
+└── assets/results.svg   # 结果图
+```
+
 ## Roadmap
 
-- [ ] 把三个 adapter 打包成 GitHub Release 附件（共约 60MB），下载即用，不必重训
+- [x] 三个 adapter 随仓库提供（`weights/`，共 58MB），下载即用
 - [ ] 新闻任务改受限 softmax：只读 7 个标签 token 的概率，比生成式快，且能直接得到置信度
 - [x] harness 的阈值在回归集上标定（情绪 2,020 / 新闻 884 / 主体 1,464 条）
 - [ ] 批量推理接口：同一批请求按任务分组，减少 adapter 切换
