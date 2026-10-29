@@ -221,6 +221,7 @@ h.answer("这家公司业绩暴雷，投资者情绪一片悲观")
 ├── eval_entity.py       # 主体抽取评估：抽实体 + 严格 / 宽松匹配 + F1 + 幻觉率
 ├── harness.py           # Agent 外壳：路由 + 校验 + 三档判定 + 日志
 ├── calibrate.py         # 阈值标定：覆盖率-准确率曲线
+├── tests/               # 路由回归测试（24 条，不加载模型，秒级）
 ├── data/fincuge/        # 三个任务的数据（约 15MB）
 └── assets/results.svg   # 结果图
 ```
