@@ -551,17 +551,77 @@ def calibrate(task, limit=0):
     print(f"  [标定 {task}] 完成 {n} 条，整体准确率 {right/max(1,n):.1%} → {path}")
 
 
+def chat():
+    """交互模式：一行一行地喂文本，看它判成什么任务、答什么、有多大把握
+
+    为什么实体任务要追问事件类型：实体的训练指令里带事件类型（121 种），
+    不给事件类型等于分布外输入，模型会答到原文之外去——这是我们实测过的坑。
+    """
+    h = Harness()
+    print("\n输入一段文本回车即可。命令：")
+    print("  :task emotion|newscat|entity|auto   锁定或解除任务")
+    print("  :instr <一句话>                     手动指定指令（一般不用）")
+    print("  :q                                  退出\n")
+
+    task, instr = None, None
+    while True:
+        try:
+            line = input("你> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not line:
+            continue
+        if line in (":q", ":quit", "exit"):
+            break
+        if line.startswith(":task"):
+            parts = line.split(maxsplit=1)
+            v = parts[1].strip() if len(parts) > 1 else "auto"
+            task = None if v in ("auto", "") else v
+            print(f"  [任务：{task or '自动判断'}]")
+            continue
+        if line.startswith(":instr"):
+            parts = line.split(maxsplit=1)
+            instr = parts[1].strip() if len(parts) > 1 else None
+            print(f"  [指令：{instr or '默认'}]")
+            continue
+
+        # 实体任务先问事件类型，否则是分布外输入
+        use_instr = instr
+        if task is None:
+            guess, _, _ = route(line)
+        else:
+            guess = task
+        if guess == "entity" and not use_instr:
+            ev = input("  这是哪类事件？（如 信批违规 / 涉嫌非法集资 / 资金账户风险 / 高管负面，直接回车跳过）> ").strip()
+            if ev:
+                use_instr = f"分析以下新闻，抽取{ev}事件相关的主体信息。"
+
+        r = h.answer(line, task_hint=task, instruction=use_instr)
+        print(f"  任务 {r['task']}   答案 {r['answer']!r}   置信 {r['confidence']:.2f}   "
+              f"{r['decision']}   {r['latency_ms']}ms")
+        if r.get("probs"):
+            print(f"  三类概率 {r['probs']}")
+        if r["flags"]:
+            print(f"  标记 {r['flags']}")
+    print("再见。")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("text", nargs="?", default="")
     ap.add_argument("--task", default=None, choices=list(SKILLS))
     ap.add_argument("--instruction", default=None)
+    ap.add_argument("--chat", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--calibrate", default=None, choices=list(SKILLS))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--n", type=int, default=50)
     args = ap.parse_args()
 
+    if args.chat:
+        chat()
+        return
     if args.calibrate:
         calibrate(args.calibrate, args.limit)
         return
