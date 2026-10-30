@@ -33,7 +33,7 @@
 | 模型 | 参数 | 训练方式 | FinESE | 出处 |
 |---|---|---|---|---|
 | Touchstone-GPT | 7B | 金融语料预训练 + 指令微调 | 90.7 | Golden Touchstone（作者自研，自报） |
-| **本项目** | **0.6B** | **LoRA 微调，4GB 显卡** | **86.1** | 本仓库 1,464 条 |
+| **本项目QWEN3-0.6B** | **0.6B** | **LoRA 微调，4GB 显卡** | **86.1** | 本仓库 1,464 条 |
 | GPT-4o | 未公开 | 零样本 | 68.7 | Golden Touchstone |
 | DISC-FinLLM | 13B | 金融指令微调 | 43.5 | Golden Touchstone |
 | CFGPT1-7B | 7B | 金融继续预训练 | 38.6 | Golden Touchstone |
