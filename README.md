@@ -41,19 +41,19 @@
 
 ### 情绪三分类 · FinFE-CN · Weighted-F1
 
-![情绪三分类与公开模型对照](assets/compare2-emotion.svg)
+![情绪三分类与公开模型对照](assets/compare-emotion.svg)
 
 三类 F1：积极 0.837 / 消极 0.779 / 中性 0.597。中性仍是短板，根因是标注噪声（同一段文本被标不同标签的占 9.6%），不是模型结构问题。
 
 ### 新闻分类 · FinNL-CN · ORMACC
 
-![新闻分类与公开模型对照](assets/compare2-newscat.svg)
+![新闻分类与公开模型对照](assets/compare-newscat.svg)
 
 **这组不能横比**：我们只有 7 个类别，公开是 15 个，长尾全并进"其它"，天然容易得高分。要严格比较，得把 15 类重训一遍，还没做。
 
 ### 事件主体抽取 · FinESE-CN · ORMACC
 
-![事件主体抽取与公开模型对照](assets/compare2-entity.svg)
+![事件主体抽取与公开模型对照](assets/compare-entity.svg)
 
 ### 合起来能说明什么
 
