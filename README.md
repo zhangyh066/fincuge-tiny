@@ -6,15 +6,63 @@
 
 ![Python](https://img.shields.io/badge/Python-3.11-blue) ![GPU](https://img.shields.io/badge/GPU-4GB%20VRAM-green) ![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
+**入口**：[权重下载](https://github.com/zhangyh066/fincuge-tiny/releases/tag/v0.1.0) · [本地跑起来](#s11) · [从零微调教程](docs/教程-从零微调.md) · [和公开报告对照](#s7)
+
 ![results](assets/results.svg)
 
 数据来自 FinCUGE 的指令化版本。三个任务都在全量评估集上评测，基座用同一套判分代码跑同一批样本，所以可以直接对比。
 
-## 更新
+## 目录
 
-- **2026-10-29** 三个任务跑完；补上 agent harness（路由 + 校验 + 拒答）。主体抽取 1,464 条测试里没有一次编造公司名。
-- **2026-10-28** 情绪用 16,157 条全量重训，原答案句式版 75.2%；把答案压成只有标签词的 Verbalizer 版 76.3%，随仓库发布的是后者。
-- **2026-10-27** 新闻七分类 89.7%，零样本基座 26.4%。
+1. [项目背景](#s1) · 2. [技术栈选型](#s2) · 3. [核心功能](#s3) · 4. [结果](#s4) · 5. [实现思路](#s5)
+6. [踩坑与优化](#s6) · 7. [和公开报告的对照](#s7) · 8. [更新](#s8) · 9. [预训练权重](#s9) · 10. [安装](#s10)
+11. [快速开始](#s11) · 12. [数据](#s12) · 13. [三个任务](#s13) · 14. [Agent harness](#s14) · 15. [为什么能塞进 4GB](#s15)
+16. [目录结构](#s16) · 17. [文档](#s17) · 18. [Roadmap](#s18) · 19. [引用](#s19) · 20. [许可](#s20)
+
+<a id="s1"></a>
+
+## 项目背景
+
+金融文本分析有个绕不开的三角：想要大模型的语言能力，数据不能出内网，按调用量付费又很贵。前两条否掉了公有 API，第三条否掉了自建大模型，一个 7B 的金融专用模型，光权重就 14GB。
+
+这个项目验证一个更窄的问题：**任务足够窄的时候，一张 4GB 的消费级显卡能不能做出可用的结果。**
+
+结论是可以。三个任务全部在 GTX 1650（4GB）上完成训练与推理，单任务 3 小时以内，峰值显存 1.55GB。
+
+<a id="s2"></a>
+
+## 技术栈选型
+
+每个环节都选了"能塞进 4GB、并且能被验证"的最简方案，右边是被否掉的备选和原因。
+
+| 环节 | 选择 | 备选 | 为什么不选备选 |
+|---|---|---|---|
+| 基座模型 | Qwen3-0.6B | Qwen2.5-0.5B / 1.7B / 7B 级 | 0.5B 中文指令跟随明显弱；1.7B 在 4GB 上只能 batch 1、训练时长翻倍；7B 权重 14GB 装不下 |
+| 微调方式 | LoRA（r=8，挂 7 个模块） | 全参微调 / QLoRA | 全参要 8GB 以上；QLoRA 的 4bit 算子在 Turing（sm_75）上不稳且更慢 |
+| 训练框架 | 手写训练循环 `train_sft.py` | LLaMA-Factory / Unsloth | 两者默认配置在 4GB 上直接 OOM；"只对答案 token 算 loss"这类改动要能钻进训练循环内部 |
+| 情绪评估 | 受限 softmax | 生成式 + 后解析 | 情绪答案有 15 种句式，生成式要额外处理格式噪声；受限 softmax 一次前向同时给出标签和置信度 |
+| 任务路由 | 关键词 + 24 条回归集 | 小型分类器 / LLM 路由 | 三任务关键词差异大，分类器要额外标注；0.6B 自己做路由不可靠 |
+| 实体低置信 | 三次采样投票 | 单次贪婪解码 | 200 条实测：投票 91.0% vs 贪婪 89.0%，只在置信度 <0.88 时触发，成本 1.66 倍 |
+
+<a id="s3"></a>
+
+## 核心功能
+
+三个任务共用一份基座权重，按请求切换适配器，每个 LoRA 约 20MB。
+
+- **情绪三分类**：积极 / 消极 / 中性，同时输出三类概率
+- **新闻七分类**：公司 / 新冠 / 经济 / 行业 / 大盘 / 政策 / 其它
+- **事件主体抽取**：从新闻里抽出事件主体，输出严格约束在原文范围内
+
+模型之外还有一层判定，每个结果都带结论：`有把握` 直接用、`建议核对` 提示存疑、`拒答` 说明原因。业务侧拿到的不只是一个答案，还有"这个答案能不能信"。
+
+![情绪分类](assets/webui-emotion.png)
+
+![新闻七分类](assets/webui-newscat.png)
+
+![事件主体抽取](assets/webui-entity.png)
+
+<a id="s4"></a>
 
 ## 结果
 
@@ -26,274 +74,42 @@
 
 新闻分类的准确率是零样本基座的 3.4 倍。三项指标的口径与公开论文不同（数据版本、训练方式都不一样），所以没有跟论文数字横比。
 
-## 和公开报告的对照
+<a id="s5"></a>
 
-三个任务在同一份公开中文金融基准（Golden Touchstone，用的也是 FinCUGE 这批数据）里都有数字，放在一起看。
+## 实现思路
 
-**先说不等价的四处**，不然这表会误导人：
+![整体架构](assets/arch.svg)
 
-1. **切片不同**：公开报告用 test（2,020 / 884 / 1,782），我们用 valid（2,020 / 884 / 1,464）。规模接近，但样本不是同一批
-2. **新闻类别数不同**：公开报告是 **15 类**，我们是 **7 类**（长尾合并），难度不一样
-3. **训练方式不同**：公开表里的模型都是**零样本**，我们是在同一任务上**微调**过的
-4. 公开模型的推理模板由原作者各自调过，我们只用自己的一套
+分五层，每层都能单独验证、单独替换：
 
-下面三组条形按同一刻度画（0 到 0.95），越长越好；只作量级参考，不宣称胜负。
+- **数据层**：FinCUGE 三个任务转成 alpaca 三字段；新闻从 15 类并成 7 类；序列长度按各数据集的 token P99 定，不拍脑袋写 512
+- **训练层**：LoRA 只训 0.84% 参数，只对答案 token 算 loss，配梯度累积与梯度检查点，峰值显存压到 1.55GB
+- **评测层**：四套口径并行（受限 softmax / 生成式解析 / 实体严格与宽松匹配 / 幻觉率），全量评估并做置信度分层
+- **外壳层**：路由 → 校验 → 三档判定 → 重试 → 单行日志；阈值不是拍的，来自覆盖率-准确率曲线
+- **前端**：三标签页的本地网页版，加一个命令行交互模式，都只依赖 Python 标准库
 
-### 情绪三分类 · FinFE-CN · Weighted-F1
+四个关键设计，具体收益在下一节：
 
-![情绪三分类与公开模型对照](assets/compare-emotion.svg)
+1. **只对答案 token 算 loss**：`lm_head` 不再输出整段序列，省约 600MB，这是 4GB 卡能跑起来的前提
+2. **提示词拼装单一真源**：训练和评估共用同一个函数，避免"训练一种格式、评估另一种"的系统性掉分
+3. **校验分拦截与提醒两级**：致命问题（标签非法、实体不在原文）才拒答，格式瑕疵只降级为"建议核对"
+4. **只在低置信时投票**：实体任务置信度低于 0.88 才采样三次投票，拿满收益、成本只有 1.66 倍
 
-三类 F1：积极 0.837 / 消极 0.779 / 中性 0.597。中性仍是短板，根因是标注噪声（同一段文本被标不同标签的占 9.6%），不是模型结构问题。
+<a id="s6"></a>
 
-### 新闻分类 · FinNL-CN · ORMACC
+## 踩坑与优化
 
-![新闻分类与公开模型对照](assets/compare-newscat.svg)
+这一节记两件事：踩过的坑怎么修的，以及做过哪些优化（包括被数据否掉的）。
 
-**这组不能横比**：我们只有 7 个类别，公开是 15 个，长尾全并进"其它"，天然容易得高分。要严格比较，得把 15 类重训一遍，还没做。
+### 踩过的坑
 
-### 事件主体抽取 · FinESE-CN · ORMACC
-
-![事件主体抽取与公开模型对照](assets/compare-entity.svg)
-
-### 合起来能说明什么
-
-- 在**情绪**和**主体抽取**上，0.6B + 微调超过了 GPT-4o 的零样本成绩（0.754 vs 0.659、0.861 vs 0.687），而且不是一个量级的成本
-- **7B 金融专用模型（Touchstone-GPT）仍然更高**（0.789 / 0.907），说明领域预训练 + 更大参数依然有用，我们没到顶
-- **新闻分类不具备可比性**，别引用这一栏的"我们更高"
-- 一句话：0.6B + 4GB 显卡 + 3 小时训练，在两个任务上进入 7B 金融专用模型的邻居区、超过 GPT-4o 零样本；但评估切片、训练方式、类别数都不同，**这不等于"击败"**
-
-## 预训练权重
-
-三个 adapter 放在 [Releases v0.1.0](https://github.com/zhangyh066/fincuge-tiny/releases/tag/v0.1.0)，共 58MB，下载后不用重训就能用：
-
-| 文件 | 任务 | 评估结果 |
+| 现象 | 根因 | 处理 |
 |---|---|---|
-| `emotion_adapter.safetensors` + `emotion_adapter_config.json` | 情绪三分类 | 2,020 条上 76.3% |
-| `newscat_adapter.safetensors` + `newscat_adapter_config.json` | 新闻七分类 | 884 条上 89.7% |
-| `entity_adapter.safetensors` + `entity_adapter_config.json` | 事件主体抽取 | 1,464 条上 86.1% |
-
-两个文件放进同一个目录（比如 `weights/entity/`），然后直接指过去：
-
-```
-python eval_entity.py --adapter weights/entity
-```
-
-`harness.py` 会自动在 `weights/{emotion,newscat,entity}` 下找权重，放好了就能直接用：
-
-```python
-from harness import Harness
-
-h = Harness()
-h.answer("这家公司业绩暴雷，投资者情绪一片悲观")
-```
-
-只想自己训练的话可以跳过这一节，脚本会从零训出同样的 adapter。
-
-## 安装
-
-```
-pip install -r requirements.txt
-```
-
-torch 要按本机 CUDA 版本装，例如 `pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118`。
-
-基线模型默认读 `D:/ai/models/Qwen3-0.6B`，本地没有就自动从 HuggingFace 拉 `Qwen/Qwen3-0.6B`；也可以用环境变量 `QWEN_MODEL` 指定别的路径。
-
-## 快速开始
-
-数据就在仓库里，以情绪任务为例，两条命令跑完训练和评估：
-
-```
-python train_sft.py --data_path data/fincuge/emotion_train.json --num_samples 16157 \
-  --seq_len 128 --batch_size 2 --grad_accum 4 --epochs 1 --fast_loss 1 \
-  --out out/adapter-emotion
-python eval_verbalizer.py --limit 0 --adapter out/adapter-emotion --batch 4
-```
-
-在 4GB 卡上，训练大约 2 小时 50 分，评估 8 分钟。训练结束会得到三个目录：`out/adapter-emotion` 是最后一轮，`out/adapter-emotion_best` 是验证集上最好的那一轮，`out/adapter-emotion_ckpt` 是中途断点。
-
-另外两个任务把数据换掉、评估脚本换掉就行，命令在下面各自的段落里。
-
-## 数据
-
-`data/fincuge/` 下共约 15MB，已经转成 alpaca 三字段格式，clone 下来可以直接训，不用另外下载数据集。
-
-| 任务 | 训练集 | 评估集 | 数据文件 |
-|---|---|---|---|
-| 情绪三分类 | 16,157 | 2,020 | `emotion_train.json` / `emotion_eval.json` |
-| 情绪（Verbalizer 版） | 16,157 | 2,020 | `emotion_vb_train.json` / `emotion_vb_eval.json` |
-| 新闻七分类 | 7,071 | 884 | `newscat7_train.json` / `newscat7_eval.json` |
-| 事件主体抽取 | 11,752 | 1,464 | `entity_train.json` / `entity_eval.json` |
-
-```json
-{
-  "instruction": "判断以下句子的情感属性。",
-  "input": "该公司一季度净利润同比增长三成。",
-  "output": "积极"
-}
-```
-
-这些文件由 FinCUGE 原始数据转换而来，版权归 BBT-Fin / FinCUGE 原项目，放在这里只为便于复现，请遵循原项目许可，勿作商用。需要从原始数据重做时再执行 `prepare_fincuge.py` 和 `prepare_newscat7.py`。
-
-早期筛选数据时用过的第三方语料（LIMA、COIG-PC、CAIL2018、中文 Alpaca 51k）没放进仓库，各自的下载地址见 [data/SOURCES.md](data/SOURCES.md)。
-
-## 三个任务
-
-### 情绪三分类
-
-训练 16,157 条，评估 2,020 条（积极 886 / 消极 574 / 中性 560）。
-
-|                                                                                                                              |                                                 |
-| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| 这份数据的答案有 15 种句式（"积极。"、"该文本情感是积极的。"……），生成文本再解析容易踩格式的坑。这里改成直接读三个标签 token 的概率：一次前向拿到 P(积极)、P(消极)、P(中)，再把"中"接到输入末尾补一次得到 P(性 | 中)，两者相乘就是 P(中性)，最后在三类内归一化。评估只要一次前向，置信度也顺便有了。 |
-
-```
-python train_sft.py --data_path data/fincuge/emotion_train.json --num_samples 16157 \
-  --seq_len 128 --batch_size 2 --grad_accum 4 --epochs 1 --fast_loss 1 \
-  --out out/adapter-emotion
-python eval_verbalizer.py --limit 0 --adapter out/adapter-emotion --batch 4
-```
-
-另外做了一个对照：把答案压成只剩"积极/消极/中性"再训一版（`emotion_vb_train.json`），得 76.3%，只高 1.1 个百分点，在噪声范围内。瓶颈不在答案格式。
-
-### 新闻七分类
-
-训练 7,071 条，评估 884 条。
-
-原始 FinCUGE 是 15 类，这里用 `prepare_newscat7.py` 并成 7 类：公司、新冠、经济、行业、大盘、政策、其它。生成式输出，答案解析时按类别词的别名匹配（"个股"算公司，"疫情"算新冠）。
-
-```
-python prepare_newscat7.py
-python train_sft.py --data_path data/fincuge/newscat7_train.json --num_samples 7071 \
-  --seq_len 512 --batch_size 2 --grad_accum 4 --epochs 1 --fast_loss 1 \
-  --out out/adapter-newscat
-python eval_multi.py --task newscat7 --adapter out/adapter-newscat
-```
-
-### 事件主体抽取
-
-训练 11,752 条，评估 1,464 条。
-
-这是生成任务：答案是一句话加一个主体（"所属信批违规事件的金融主体是××。"），训练集有 103 种模板。评估时从生成文本里抽出主体（规则是取最后一个"是"或"："之后的内容、去标点），再跟金标比实体。
-
-```
-python train_sft.py --data_path data/fincuge/entity_train.json --num_samples 11752 \
-  --seq_len 320 --batch_size 2 --grad_accum 4 --epochs 1 --fast_loss 1 \
-  --out out/adapter-entity --val_metric entity --val_limit 200
-python eval_entity.py --adapter out/adapter-entity
-```
-
-严格匹配 86.1%，宽松匹配 89.2%（允许"雅虎"对"雅虎公司"），实体级 P/R/F1 都是 0.861。203 条错例里，78% 是原文里有好几个公司名、挑中了错的那个，22% 是多一个字少一个字（`科融环境` 抽成 `万科融环境`）。
-
-1,464 条测试里，模型预测的主体全部出现在原文中，没有一条是编造的。
-
-## Agent harness
-
-三个 adapter 可以挂在同一个基座上，由一个外壳调度：判断该用哪个技能，按固定模板调用，校验输出，没把握就说不知道。
-
-```
-输入 → 清洗 → 路由 → 技能执行 → 校验 → 三档判定 → 输出
-                     ↑               ↓
-                     └─── 重试（最多 2 次）───┘
-```
-
-```python
-from harness import Harness
-
-h = Harness()
-h.answer("这家公司业绩暴雷，投资者情绪一片悲观")
-# {'task': 'emotion', 'answer': '消极', 'confidence': 0.922,
-#  'decision': 'auto', 'flags': [], 'latency_ms': 1047}
-```
-
-三个 adapter 同时驻留（每个 LoRA 约 10MB），切换不重载。端到端延迟：情绪约 1.0s、新闻约 0.8s、主体抽取约 1.2~1.4s。
-
-| decision  | 含义      | 触发条件             |
-| --------- | ------- | ---------------- |
-| `auto`    | 直接采用    | 校验通过且置信度 ≥ 阈值    |
-| `hint`    | 给出但标注存疑 | 置信度中等，或存在非致命瑕疵   |
-| `abstain` | 拒答并说明原因 | 标签非法、实体为空、实体不在原文 |
-
-**网页版（推荐）**：三个标签页分别对应情绪、新闻分类、主体抽取，不用手选任务类型；实体页在下拉里选事件类型即可。
-
-```bash
-# Windows：双击 start_webui.bat，或
-python webui.py
-# Linux / macOS
-python webui.py --port 7860
-```
-
-浏览器打开 `127.0.0.1:7860`。纯标准库实现，不依赖 gradio / streamlit；模型只在启动时加载一次。
-
-![情绪分类](assets/webui-emotion.png)
-
-![新闻七分类](assets/webui-newscat.png)
-
-![事件主体抽取](assets/webui-entity.png)
-
-**命令行版**：`python harness.py --chat`，敲文本回车，看任务、答案、置信度和决策。
-
-每次调用写一行日志到 `logs/harness_trace.jsonl`，含路由依据、置信度、决策、flags、耗时。设计细节见 [AGENT\_HARNESS.md](AGENT_HARNESS.md)。
-
-### 实体任务的自一致性投票
-
-主体抽取有一个额外手段：置信度低时再采样 2 次、三次投票。它只在这个任务上开，因为只有生成式才有采样空间。
-
-200 条随机样本上的实测：
-
-| 触发阈值 | 触发比例 | 准确率 | 平均生成次数 |
-|---|---|---|---|
-| 不投票（greedy） | — | 89.0% | 1.00× |
-| 0.85 | 8% | 89.5% | 1.17× |
-| **0.88** | **33%** | **91.0%** | **1.66×** |
-| 0.89 | 52% | 91.0% | 2.05× |
-| 0.92 | 100% | 91.0% | 2.99× |
-
-甜点在 **0.88**：触发三分之一请求就拿满 +2.0 个点，再往上调阈值只增加成本、不再涨分。投票期间救回 5 条、坑掉 1 条；低置信那 52% 的片段提升更明显（81.9% → 85.7%）。
-
-两点说明：
-
-- 这张表的基线 89.0% 只对这 200 条成立（全量 1,464 条是 86.1%），看增量不要看绝对值
-- 投票后的置信度改用"一致度"（3 次全一致 1.0、2 次一致 0.67），和 token 概率不是一个尺度，判定阈值也另算一套
-
-## 为什么能塞进 4GB
-
-三件事一起做才够：
-
-| 手段                | 效果                              |
-| ----------------- | ------------------------------- |
-| 只对答案 token 算 loss | lm_head 不再输出整段序列，省约 600MB       |
-| LoRA r=8，挂 7 个模块  | 可训练参数 0.84%，优化器状态只占几 MB         |
-| 序列长度按数据 P99 定     | 主体抽取 P99 只有 201 token，不必按 512 跑 |
-
-配合 batch 2、梯度累积 4、梯度检查点，稳定跑在 1.55GB。实现上主要在 `train_sft.py` 的 `answer_only_loss()` 和 `--fast_loss` 开关。
-
-## 目录结构
-
-```
-.
-├── train_sft.py         # 训练：LoRA + 只对答案算 loss + 梯度累积 / 检查点
-├── prompt_util.py       # 提示词拼装的唯一真源
-├── eval_verbalizer.py   # 情绪评估：受限 softmax
-├── eval_multi.py        # 新闻评估：生成式 + 标签别名解析
-├── eval_entity.py       # 主体抽取评估：抽实体 + 严格 / 宽松匹配 + F1 + 幻觉率
-├── harness.py           # Agent 外壳：路由 + 校验 + 三档判定 + 日志
-├── calibrate.py         # 阈值标定：覆盖率-准确率曲线
-├── tests/               # 路由回归测试（24 条，不加载模型，秒级）
-├── data/fincuge/        # 三个任务的数据（约 15MB）
-└── assets/results.svg   # 结果图
-```
-
-## 文档
-
-- [从零微调教程](docs/教程-从零微调.md)：从装环境到训练、评估、封成 agent，每步都有命令和"该看到什么"
-- [Agent harness 设计](AGENT_HARNESS.md)：六层结构、校验规则、阈值定法、重试策略
-- [对标成熟方案与提升空间](docs/agent-对标与提升.md)：级联决策、约束解码、置信度校准，以及我们还差什么
-- [数据来源](data/SOURCES.md)：仓库内的数据和没放进来的第三方语料各来自哪里
-
-## 我们改了什么
-
-分四块，每块都标了效果；最后一块是**试过但被数据否掉**的方向。
+| 评估分数比预期低 5~10 个点 | 训练与评估的提示词拼装不一致（一个用 `\n`、一个用 `\n\n文本：`） | 抽出 `prompt_util.py` 作为唯一真源，两边都调它 |
+| 公司名带括号的样本被直接拒答 | 校验把括号当成"多余标点"判为格式违规 | 校验分两级：致命问题才拦截，格式瑕疵降级为"建议核对"，自检从 49/50 回到 50/50 |
+| batch 16 直接 OOM，但显存看着还有 | 注意力中间激活峰值叠上显存碎片 | batch 降到 4，并加 `expandable_segments` |
+| 长新闻静默超长，准确率莫名下降 | 输入超过训练最大长度被截断，但没有任何提示 | 超过 448 token 主动截断并打 `input_truncated` 标记 |
+| 训练跑到一半进程消失 | 长任务被终端回收 | 每 300 步落盘断点、日志逐行 flush，中断后可续跑 |
 
 ### 训练侧
 
@@ -350,6 +166,297 @@ python webui.py --port 7860
 | few-shot / 改提示词措辞 | 70.8% → 60.8%，0.6B 对上下文里的措辞极敏感 |
 | 投票后"取最长子串" | 91.0% → 90.5%，反而更差。已记录为一个已知失效模式：投票可能把长名字投成短名（`某某平台` → `某某`） |
 
+<a id="s7"></a>
+
+## 和公开报告的对照
+
+三个任务在同一份公开中文金融基准（Golden Touchstone，用的也是 FinCUGE 这批数据）里都有数字，放在一起看。
+
+**先说不等价的四处**，不然这表会误导人：
+
+1. **切片不同**：公开报告用 test（2,020 / 884 / 1,782），我们用 valid（2,020 / 884 / 1,464）。规模接近，但样本不是同一批
+2. **新闻类别数不同**：公开报告是 **15 类**，我们是 **7 类**（长尾合并），难度不一样
+3. **训练方式不同**：公开表里的模型都是**零样本**，我们是在同一任务上**微调**过的
+4. 公开模型的推理模板由原作者各自调过，我们只用自己的一套
+
+下面三组条形按同一刻度画（0 到 0.95），越长越好；只作量级参考，不宣称胜负。
+
+### 情绪三分类 · FinFE-CN · Weighted-F1
+
+![情绪三分类与公开模型对照](assets/compare-emotion.svg)
+
+三类 F1：积极 0.837 / 消极 0.779 / 中性 0.597。中性仍是短板，根因是标注噪声（同一段文本被标不同标签的占 9.6%），不是模型结构问题。
+
+### 新闻分类 · FinNL-CN · ORMACC
+
+![新闻分类与公开模型对照](assets/compare-newscat.svg)
+
+**这组不能横比**：我们只有 7 个类别，公开是 15 个，长尾全并进"其它"，天然容易得高分。要严格比较，得把 15 类重训一遍，还没做。
+
+### 事件主体抽取 · FinESE-CN · ORMACC
+
+![事件主体抽取与公开模型对照](assets/compare-entity.svg)
+
+### 合起来能说明什么
+
+- 在**情绪**和**主体抽取**上，0.6B + 微调超过了 GPT-4o 的零样本成绩（0.754 vs 0.659、0.861 vs 0.687），而且不是一个量级的成本
+- **7B 金融专用模型（Touchstone-GPT）仍然更高**（0.789 / 0.907），说明领域预训练 + 更大参数依然有用，我们没到顶
+- **新闻分类不具备可比性**，别引用这一栏的"我们更高"
+- 一句话：0.6B + 4GB 显卡 + 3 小时训练，在两个任务上进入 7B 金融专用模型的邻居区、超过 GPT-4o 零样本；但评估切片、训练方式、类别数都不同，**这不等于"击败"**
+
+<a id="s8"></a>
+
+## 更新
+
+- **2026-10-29** 三个任务跑完；补上 agent harness（路由 + 校验 + 拒答）。主体抽取 1,464 条测试里没有一次编造公司名。
+- **2026-10-28** 情绪用 16,157 条全量重训，原答案句式版 75.2%；把答案压成只有标签词的 Verbalizer 版 76.3%，随仓库发布的是后者。
+- **2026-10-27** 新闻七分类 89.7%，零样本基座 26.4%。
+
+<a id="s9"></a>
+
+## 预训练权重
+
+三个 adapter 放在 [Releases v0.1.0](https://github.com/zhangyh066/fincuge-tiny/releases/tag/v0.1.0)，共 58MB，下载后不用重训就能用：
+
+| 文件 | 任务 | 评估结果 |
+|---|---|---|
+| `emotion_adapter.safetensors` + `emotion_adapter_config.json` | 情绪三分类 | 2,020 条上 76.3% |
+| `newscat_adapter.safetensors` + `newscat_adapter_config.json` | 新闻七分类 | 884 条上 89.7% |
+| `entity_adapter.safetensors` + `entity_adapter_config.json` | 事件主体抽取 | 1,464 条上 86.1% |
+
+两个文件放进同一个目录（比如 `weights/entity/`），然后直接指过去：
+
+```
+python eval_entity.py --adapter weights/entity
+```
+
+`harness.py` 会自动在 `weights/{emotion,newscat,entity}` 下找权重，放好了就能直接用：
+
+```python
+from harness import Harness
+
+h = Harness()
+h.answer("这家公司业绩暴雷，投资者情绪一片悲观")
+```
+
+只想自己训练的话可以跳过这一节，脚本会从零训出同样的 adapter。
+
+<a id="s10"></a>
+
+## 安装
+
+```
+pip install -r requirements.txt
+```
+
+torch 要按本机 CUDA 版本装，例如 `pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118`。
+
+基线模型默认读 `D:/ai/models/Qwen3-0.6B`，本地没有就自动从 HuggingFace 拉 `Qwen/Qwen3-0.6B`；也可以用环境变量 `QWEN_MODEL` 指定别的路径。
+
+<a id="s11"></a>
+
+## 快速开始
+
+数据就在仓库里，以情绪任务为例，两条命令跑完训练和评估：
+
+```
+python train_sft.py --data_path data/fincuge/emotion_train.json --num_samples 16157 \
+  --seq_len 128 --batch_size 2 --grad_accum 4 --epochs 1 --fast_loss 1 \
+  --out out/adapter-emotion
+python eval_verbalizer.py --limit 0 --adapter out/adapter-emotion --batch 4
+```
+
+在 4GB 卡上，训练大约 2 小时 50 分，评估 8 分钟。训练结束会得到三个目录：`out/adapter-emotion` 是最后一轮，`out/adapter-emotion_best` 是验证集上最好的那一轮，`out/adapter-emotion_ckpt` 是中途断点。
+
+另外两个任务把数据换掉、评估脚本换掉就行，命令在下面各自的段落里。
+
+<a id="s12"></a>
+
+## 数据
+
+`data/fincuge/` 下共约 15MB，已经转成 alpaca 三字段格式，clone 下来可以直接训，不用另外下载数据集。
+
+| 任务 | 训练集 | 评估集 | 数据文件 |
+|---|---|---|---|
+| 情绪三分类 | 16,157 | 2,020 | `emotion_train.json` / `emotion_eval.json` |
+| 情绪（Verbalizer 版） | 16,157 | 2,020 | `emotion_vb_train.json` / `emotion_vb_eval.json` |
+| 新闻七分类 | 7,071 | 884 | `newscat7_train.json` / `newscat7_eval.json` |
+| 事件主体抽取 | 11,752 | 1,464 | `entity_train.json` / `entity_eval.json` |
+
+```json
+{
+  "instruction": "判断以下句子的情感属性。",
+  "input": "该公司一季度净利润同比增长三成。",
+  "output": "积极"
+}
+```
+
+这些文件由 FinCUGE 原始数据转换而来，版权归 BBT-Fin / FinCUGE 原项目，放在这里只为便于复现，请遵循原项目许可，勿作商用。需要从原始数据重做时再执行 `prepare_fincuge.py` 和 `prepare_newscat7.py`。
+
+早期筛选数据时用过的第三方语料（LIMA、COIG-PC、CAIL2018、中文 Alpaca 51k）没放进仓库，各自的下载地址见 [data/SOURCES.md](data/SOURCES.md)。
+
+<a id="s13"></a>
+
+## 三个任务
+
+### 情绪三分类
+
+训练 16,157 条，评估 2,020 条（积极 886 / 消极 574 / 中性 560）。
+
+|                                                                                                                              |                                                 |
+| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| 这份数据的答案有 15 种句式（"积极。"、"该文本情感是积极的。"……），生成文本再解析容易踩格式的坑。这里改成直接读三个标签 token 的概率：一次前向拿到 P(积极)、P(消极)、P(中)，再把"中"接到输入末尾补一次得到 P(性 | 中)，两者相乘就是 P(中性)，最后在三类内归一化。评估只要一次前向，置信度也顺便有了。 |
+
+```
+python train_sft.py --data_path data/fincuge/emotion_train.json --num_samples 16157 \
+  --seq_len 128 --batch_size 2 --grad_accum 4 --epochs 1 --fast_loss 1 \
+  --out out/adapter-emotion
+python eval_verbalizer.py --limit 0 --adapter out/adapter-emotion --batch 4
+```
+
+另外做了一个对照：把答案压成只剩"积极/消极/中性"再训一版（`emotion_vb_train.json`），得 76.3%，只高 1.1 个百分点，在噪声范围内。瓶颈不在答案格式。
+
+### 新闻七分类
+
+训练 7,071 条，评估 884 条。
+
+原始 FinCUGE 是 15 类，这里用 `prepare_newscat7.py` 并成 7 类：公司、新冠、经济、行业、大盘、政策、其它。生成式输出，答案解析时按类别词的别名匹配（"个股"算公司，"疫情"算新冠）。
+
+```
+python prepare_newscat7.py
+python train_sft.py --data_path data/fincuge/newscat7_train.json --num_samples 7071 \
+  --seq_len 512 --batch_size 2 --grad_accum 4 --epochs 1 --fast_loss 1 \
+  --out out/adapter-newscat
+python eval_multi.py --task newscat7 --adapter out/adapter-newscat
+```
+
+### 事件主体抽取
+
+训练 11,752 条，评估 1,464 条。
+
+这是生成任务：答案是一句话加一个主体（"所属信批违规事件的金融主体是××。"），训练集有 103 种模板。评估时从生成文本里抽出主体（规则是取最后一个"是"或"："之后的内容、去标点），再跟金标比实体。
+
+```
+python train_sft.py --data_path data/fincuge/entity_train.json --num_samples 11752 \
+  --seq_len 320 --batch_size 2 --grad_accum 4 --epochs 1 --fast_loss 1 \
+  --out out/adapter-entity --val_metric entity --val_limit 200
+python eval_entity.py --adapter out/adapter-entity
+```
+
+严格匹配 86.1%，宽松匹配 89.2%（允许"雅虎"对"雅虎公司"），实体级 P/R/F1 都是 0.861。203 条错例里，78% 是原文里有好几个公司名、挑中了错的那个，22% 是多一个字少一个字（`科融环境` 抽成 `万科融环境`）。
+
+1,464 条测试里，模型预测的主体全部出现在原文中，没有一条是编造的。
+
+<a id="s14"></a>
+
+## Agent harness
+
+三个 adapter 可以挂在同一个基座上，由一个外壳调度：判断该用哪个技能，按固定模板调用，校验输出，没把握就说不知道。
+
+```
+输入 → 清洗 → 路由 → 技能执行 → 校验 → 三档判定 → 输出
+                     ↑               ↓
+                     └─── 重试（最多 2 次）───┘
+```
+
+```python
+from harness import Harness
+
+h = Harness()
+h.answer("这家公司业绩暴雷，投资者情绪一片悲观")
+# {'task': 'emotion', 'answer': '消极', 'confidence': 0.922,
+#  'decision': 'auto', 'flags': [], 'latency_ms': 1047}
+```
+
+三个 adapter 同时驻留（每个 LoRA 约 10MB），切换不重载。端到端延迟：情绪约 1.0s、新闻约 0.8s、主体抽取约 1.2~1.4s。
+
+| decision  | 含义      | 触发条件             |
+| --------- | ------- | ---------------- |
+| `auto`    | 直接采用    | 校验通过且置信度 ≥ 阈值    |
+| `hint`    | 给出但标注存疑 | 置信度中等，或存在非致命瑕疵   |
+| `abstain` | 拒答并说明原因 | 标签非法、实体为空、实体不在原文 |
+
+**网页版（推荐）**：三个标签页分别对应情绪、新闻分类、主体抽取，不用手选任务类型；实体页在下拉里选事件类型即可。
+
+```bash
+# Windows：双击 start_webui.bat，或
+python webui.py
+# Linux / macOS
+python webui.py --port 7860
+```
+
+浏览器打开 `127.0.0.1:7860`。纯标准库实现，不依赖 gradio / streamlit；模型只在启动时加载一次。
+
+界面截图见[核心功能](#s3)。
+
+**命令行版**：`python harness.py --chat`，敲文本回车，看任务、答案、置信度和决策。
+
+每次调用写一行日志到 `logs/harness_trace.jsonl`，含路由依据、置信度、决策、flags、耗时。设计细节见 [AGENT\_HARNESS.md](AGENT_HARNESS.md)。
+
+### 实体任务的自一致性投票
+
+主体抽取有一个额外手段：置信度低时再采样 2 次、三次投票。它只在这个任务上开，因为只有生成式才有采样空间。
+
+200 条随机样本上的实测：
+
+| 触发阈值 | 触发比例 | 准确率 | 平均生成次数 |
+|---|---|---|---|
+| 不投票（greedy） | — | 89.0% | 1.00× |
+| 0.85 | 8% | 89.5% | 1.17× |
+| **0.88** | **33%** | **91.0%** | **1.66×** |
+| 0.89 | 52% | 91.0% | 2.05× |
+| 0.92 | 100% | 91.0% | 2.99× |
+
+甜点在 **0.88**：触发三分之一请求就拿满 +2.0 个点，再往上调阈值只增加成本、不再涨分。投票期间救回 5 条、坑掉 1 条；低置信那 52% 的片段提升更明显（81.9% → 85.7%）。
+
+两点说明：
+
+- 这张表的基线 89.0% 只对这 200 条成立（全量 1,464 条是 86.1%），看增量不要看绝对值
+- 投票后的置信度改用"一致度"（3 次全一致 1.0、2 次一致 0.67），和 token 概率不是一个尺度，判定阈值也另算一套
+
+<a id="s15"></a>
+
+## 为什么能塞进 4GB
+
+三件事一起做才够：
+
+| 手段                | 效果                              |
+| ----------------- | ------------------------------- |
+| 只对答案 token 算 loss | lm_head 不再输出整段序列，省约 600MB       |
+| LoRA r=8，挂 7 个模块  | 可训练参数 0.84%，优化器状态只占几 MB         |
+| 序列长度按数据 P99 定     | 主体抽取 P99 只有 201 token，不必按 512 跑 |
+
+配合 batch 2、梯度累积 4、梯度检查点，稳定跑在 1.55GB。实现上主要在 `train_sft.py` 的 `answer_only_loss()` 和 `--fast_loss` 开关。
+
+<a id="s16"></a>
+
+## 目录结构
+
+```
+.
+├── train_sft.py         # 训练：LoRA + 只对答案算 loss + 梯度累积 / 检查点
+├── prompt_util.py       # 提示词拼装的唯一真源
+├── eval_verbalizer.py   # 情绪评估：受限 softmax
+├── eval_multi.py        # 新闻评估：生成式 + 标签别名解析
+├── eval_entity.py       # 主体抽取评估：抽实体 + 严格 / 宽松匹配 + F1 + 幻觉率
+├── harness.py           # Agent 外壳：路由 + 校验 + 三档判定 + 日志
+├── calibrate.py         # 阈值标定：覆盖率-准确率曲线
+├── tests/               # 路由回归测试（24 条，不加载模型，秒级）
+├── data/fincuge/        # 三个任务的数据（约 15MB）
+└── assets/results.svg   # 结果图
+```
+
+<a id="s17"></a>
+
+## 文档
+
+- [从零微调教程](docs/教程-从零微调.md)：从装环境到训练、评估、封成 agent，每步都有命令和"该看到什么"
+- [Agent harness 设计](AGENT_HARNESS.md)：六层结构、校验规则、阈值定法、重试策略
+- [对标成熟方案与提升空间](docs/agent-对标与提升.md)：级联决策、约束解码、置信度校准，以及我们还差什么
+- [数据来源](data/SOURCES.md)：仓库内的数据和没放进来的第三方语料各来自哪里
+
+<a id="s18"></a>
+
 ## Roadmap
 
 - [x] 三个 adapter 打包成 [Release v0.1.0](https://github.com/zhangyh066/fincuge-tiny/releases/tag/v0.1.0) 附件（58MB），下载即用
@@ -358,6 +465,8 @@ python webui.py --port 7860
 - [x] harness 的阈值在回归集上标定（情绪 2,020 / 新闻 884 / 主体 1,464 条）
 - [ ] 批量推理接口：同一批请求按任务分组，减少 adapter 切换
 - [ ] 补 FinESE 官方测试集（1,782 条），本项目用的是 1,464 条
+
+<a id="s19"></a>
 
 ## 引用
 
@@ -376,6 +485,8 @@ python webui.py --port 7860
   year={2023}
 }
 ```
+
+<a id="s20"></a>
 
 ## 许可
 
