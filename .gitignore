@@ -59,3 +59,6 @@ dist/
 
 # 通用启动器（相对路径，别人 clone 后可直接双击）
 !start_webui.bat
+
+# 截图/预览临时文件
+assets/_preview*.png

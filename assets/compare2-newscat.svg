@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="340" viewBox="0 0 820 340" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect width="820" height="340" fill="#ffffff"/>
+  <text x="24" y="28" font-size="15" font-weight="600" fill="#1f2328">新闻分类 · FinNL-CN · ORMACC（类别数不同，仅供参考）</text>
+  <rect x="606" y="18" width="11" height="11" fill="#b6bcc4" rx="2"/>
+  <text x="623" y="27" font-size="11" fill="#57606a">公开模型</text>
+  <rect x="682" y="18" width="11" height="11" fill="#e0672a" rx="2"/>
+  <text x="699" y="27" font-size="11" fill="#57606a">本项目</text>
+  <line x1="220" y1="62" x2="220" y2="286" stroke="#eaecef" stroke-width="1"/>
+  <text x="220" y="302" font-size="10" fill="#8c959f" text-anchor="middle">0.00</text>
+  <line x1="320" y1="62" x2="320" y2="286" stroke="#eaecef" stroke-width="1"/>
+  <text x="320" y="302" font-size="10" fill="#8c959f" text-anchor="middle">0.25</text>
+  <line x1="420" y1="62" x2="420" y2="286" stroke="#eaecef" stroke-width="1"/>
+  <text x="420" y="302" font-size="10" fill="#8c959f" text-anchor="middle">0.50</text>
+  <line x1="520" y1="62" x2="520" y2="286" stroke="#eaecef" stroke-width="1"/>
+  <text x="520" y="302" font-size="10" fill="#8c959f" text-anchor="middle">0.75</text>
+  <line x1="620" y1="62" x2="620" y2="286" stroke="#eaecef" stroke-width="1"/>
+  <text x="620" y="302" font-size="10" fill="#8c959f" text-anchor="middle">1.00</text>
+  <text x="208" y="82" font-size="12" fill="#1f2328" text-anchor="end">Touchstone-GPT</text>
+  <rect x="220" y="70" width="334.4" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="562.4" y="82" font-size="11.5" font-weight="400" fill="#57606a">0.836</text>
+  <text x="668" y="82" font-size="10.5" fill="#8c959f">15 类 · 预训练</text>
+  <text x="208" y="114" font-size="12" fill="#1f2328" text-anchor="end">本项目 Qwen3-0.6B</text>
+  <rect x="220" y="102" width="358.8" height="16" fill="#e0672a" rx="3"/>
+  <text x="586.8" y="114" font-size="11.5" font-weight="600" fill="#b8501c">0.897</text>
+  <text x="668" y="114" font-size="10.5" fill="#8c959f">7 类 · LoRA</text>
+  <text x="208" y="146" font-size="12" fill="#1f2328" text-anchor="end">GPT-4o</text>
+  <rect x="220" y="134" width="132.1" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="360.1" y="146" font-size="11.5" font-weight="400" fill="#57606a">0.330</text>
+  <text x="668" y="146" font-size="10.5" fill="#8c959f">15 类 · 零样本</text>
+  <text x="208" y="178" font-size="12" fill="#1f2328" text-anchor="end">CFGPT1-7B</text>
+  <rect x="220" y="166" width="35.8" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="263.8" y="178" font-size="11.5" font-weight="400" fill="#57606a">0.089</text>
+  <text x="668" y="178" font-size="10.5" fill="#8c959f">15 类 · 继续预训练</text>
+  <text x="208" y="210" font-size="12" fill="#1f2328" text-anchor="end">Llama-3-8B-Instruct</text>
+  <rect x="220" y="198" width="29.9" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="257.9" y="210" font-size="11.5" font-weight="400" fill="#57606a">0.075</text>
+  <text x="668" y="210" font-size="10.5" fill="#8c959f">15 类 · 零样本</text>
+  <text x="208" y="242" font-size="12" fill="#1f2328" text-anchor="end">Qwen2-7B-Instruct</text>
+  <rect x="220" y="230" width="24.9" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="252.9" y="242" font-size="11.5" font-weight="400" fill="#57606a">0.062</text>
+  <text x="668" y="242" font-size="10.5" fill="#8c959f">15 类 · 零样本</text>
+  <text x="208" y="274" font-size="12" fill="#1f2328" text-anchor="end">DISC-FinLLM</text>
+  <rect x="220" y="262" width="1.5" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="229.5" y="274" font-size="11.5" font-weight="400" fill="#57606a">0.001</text>
+  <text x="668" y="274" font-size="10.5" fill="#8c959f">15 类 · 微调</text>
+  <text x="24" y="328" font-size="10.5" fill="#8c959f">本项目为 7 类（长尾合并为其它），公开为 15 类，条形长度不可直接比较。</text>
+</svg>
