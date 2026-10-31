@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="336" viewBox="0 0 760 336" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect width="760" height="336" fill="#ffffff"/>
+  <text x="24" y="28" font-size="15" font-weight="600" fill="#1f2328">情绪三分类 · FinFE-CN · Weighted-F1</text>
+  <rect x="556" y="18" width="11" height="11" fill="#b6bcc4" rx="2"/>
+  <text x="573" y="27" font-size="11" fill="#57606a">公开模型</text>
+  <rect x="626" y="18" width="11" height="11" fill="#e0672a" rx="2"/>
+  <text x="643" y="27" font-size="11" fill="#57606a">本项目</text>
+  <line x1="236" y1="60" x2="236" y2="284" stroke="#eaecef" stroke-width="1"/>
+  <text x="236" y="300" font-size="10" fill="#8c959f" text-anchor="middle">0.00</text>
+  <line x1="336" y1="60" x2="336" y2="284" stroke="#eaecef" stroke-width="1"/>
+  <text x="336" y="300" font-size="10" fill="#8c959f" text-anchor="middle">0.25</text>
+  <line x1="436" y1="60" x2="436" y2="284" stroke="#eaecef" stroke-width="1"/>
+  <text x="436" y="300" font-size="10" fill="#8c959f" text-anchor="middle">0.50</text>
+  <line x1="536" y1="60" x2="536" y2="284" stroke="#eaecef" stroke-width="1"/>
+  <text x="536" y="300" font-size="10" fill="#8c959f" text-anchor="middle">0.75</text>
+  <line x1="636" y1="60" x2="636" y2="284" stroke="#eaecef" stroke-width="1"/>
+  <text x="636" y="300" font-size="10" fill="#8c959f" text-anchor="middle">1.00</text>
+  <text x="226" y="80" font-size="12" fill="#1f2328" text-anchor="end">Touchstone-GPT</text>
+  <rect x="236" y="68" width="315.5" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="558.5" y="80" font-size="11.5" font-weight="400" fill="#57606a">0.789</text>
+  <text x="599.5" y="80" font-size="10.5" fill="#8c959f">7B · 金融预训练 + 指令微调</text>
+  <text x="226" y="112" font-size="12" fill="#1f2328" text-anchor="end">本项目 Qwen3-0.6B</text>
+  <rect x="236" y="100" width="301.7" height="16" fill="#e0672a" rx="3"/>
+  <text x="544.7" y="112" font-size="11.5" font-weight="600" fill="#b8501c">0.754</text>
+  <text x="585.7" y="112" font-size="10.5" fill="#8c959f">0.6B · LoRA / 4GB 显卡</text>
+  <text x="226" y="144" font-size="12" fill="#1f2328" text-anchor="end">GPT-4o</text>
+  <rect x="236" y="132" width="263.7" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="506.7" y="144" font-size="11.5" font-weight="400" fill="#57606a">0.659</text>
+  <text x="547.7" y="144" font-size="10.5" fill="#8c959f">零样本</text>
+  <text x="226" y="176" font-size="12" fill="#1f2328" text-anchor="end">Qwen2-7B-Instruct</text>
+  <rect x="236" y="164" width="251.0" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="494.0" y="176" font-size="11.5" font-weight="400" fill="#57606a">0.627</text>
+  <text x="535.0" y="176" font-size="10.5" fill="#8c959f">零样本</text>
+  <text x="226" y="208" font-size="12" fill="#1f2328" text-anchor="end">DISC-FinLLM</text>
+  <rect x="236" y="196" width="167.1" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="410.1" y="208" font-size="11.5" font-weight="400" fill="#57606a">0.418</text>
+  <text x="451.1" y="208" font-size="10.5" fill="#8c959f">13B · 金融指令微调</text>
+  <text x="226" y="240" font-size="12" fill="#1f2328" text-anchor="end">Llama-3-8B-Instruct</text>
+  <rect x="236" y="228" width="145.3" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="388.3" y="240" font-size="11.5" font-weight="400" fill="#57606a">0.363</text>
+  <text x="429.3" y="240" font-size="10.5" fill="#8c959f">零样本</text>
+  <text x="226" y="272" font-size="12" fill="#1f2328" text-anchor="end">CFGPT1-7B</text>
+  <rect x="236" y="260" width="101.1" height="16" fill="#b6bcc4" rx="3"/>
+  <text x="344.1" y="272" font-size="11.5" font-weight="400" fill="#57606a">0.253</text>
+  <text x="385.1" y="272" font-size="10.5" fill="#8c959f">7B · 金融继续预训练</text>
+  <text x="24" y="326" font-size="10.5" fill="#8c959f">评估切片：公开用 test，本项目用 valid。公开模型均为零样本，本项目为微调。</text>
+</svg>
