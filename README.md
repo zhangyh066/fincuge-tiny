@@ -6,7 +6,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.11-blue) ![GPU](https://img.shields.io/badge/GPU-4GB%20VRAM-green) ![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-**入口**：[权重下载](https://github.com/zhangyh066/fincuge-tiny/releases/tag/v0.1.0) · [本地跑起来](#s11) · [从零微调教程](docs/教程-从零微调.md) · [和公开报告对照](#s7)
+**入口**：[权重下载](https://github.com/zhangyh066/fincuge-tiny/releases/tag/v0.1.0) · [本地跑起来](#s11) · [和公开报告对照](#s7)
 
 ![results](assets/results.svg)
 
@@ -450,7 +450,6 @@ python webui.py --port 7860
 
 ## 文档
 
-- [从零微调教程](docs/教程-从零微调.md)：从装环境到训练、评估、封成 agent，每步都有命令和"该看到什么"
 - [Agent harness 设计](AGENT_HARNESS.md)：六层结构、校验规则、阈值定法、重试策略
 - [对标成熟方案与提升空间](docs/agent-对标与提升.md)：级联决策、约束解码、置信度校准，以及我们还差什么
 - [数据来源](data/SOURCES.md)：仓库内的数据和没放进来的第三方语料各来自哪里

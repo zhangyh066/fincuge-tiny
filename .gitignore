@@ -61,3 +61,6 @@ dist/
 
 # 截图/预览临时文件
 assets/_preview*.png
+
+# 本地个人目录（不进仓库）
+/docs/local/
