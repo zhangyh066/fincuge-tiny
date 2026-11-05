@@ -2,6 +2,8 @@
 #   不忽略 data/，否则别人 clone 下来跑不了
 #   但第三方语料（LIMA / COIG / 原始 parquet）不入库：体积大且有各自许可
 data/candidates/
+data/batch_jobs/
+batch_results/
 data/alpaca_zh_51k.json
 downloads/
 models/

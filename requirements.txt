@@ -7,3 +7,4 @@ peft==0.21.2
 safetensors>=0.4.0
 numpy>=1.24
 tqdm>=4.66
+openpyxl>=3.1,<4

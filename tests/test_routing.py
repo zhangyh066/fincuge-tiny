@@ -44,5 +44,9 @@ def main():
     return 0
 
 
+def test_routing():
+    assert main() == 0
+
+
 if __name__ == "__main__":
     sys.exit(main())

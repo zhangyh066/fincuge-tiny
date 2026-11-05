@@ -15,13 +15,18 @@
 """
 import argparse
 import json
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, quote, urlparse
 
+from batch_runner import BatchManager
 from harness import Harness
 
 H = None
+BATCH = None
 LOCK = threading.Lock()
 
 # 实体任务的事件类型：实体的训练指令里带事件类型，不给就是分布外输入。
@@ -87,19 +92,32 @@ PAGE = r"""<!DOCTYPE html>
   .flag{font-size:11px;color:var(--muted);background:#f1f3f5;border-radius:6px;padding:3px 7px}
   .err{margin-top:14px;color:var(--bad);font-size:13px}
   footer{color:var(--muted);font-size:12px;margin-top:26px;text-align:center}
+  input[type=file]{display:none}
+  .file-name{font-size:13px;color:var(--muted)}
+  .progress{height:10px;background:#eef0f3;border-radius:99px;overflow:hidden;margin:12px 0 8px}
+  .progress>span{display:block;height:100%;background:var(--brand);transition:width .2s}
+  .job{border-top:1px solid var(--line);padding:16px 0}
+  .job:first-child{border-top:0}
+  .job-title{font-size:14px;font-weight:650;word-break:break-all}
+  .job-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .job-actions button,.job-actions a{border:1px solid var(--line);border-radius:7px;background:#fff;
+       color:var(--text);padding:6px 10px;font-size:12px;cursor:pointer;text-decoration:none}
+  .output-path{font-family:Consolas,monospace;font-size:12px;word-break:break-all;color:var(--muted);margin-top:8px}
+  .counts{font-size:12px;color:var(--muted);line-height:1.8}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <h1>FinCUGE-Tiny · 本地小模型</h1>
-    <div class="sub">Qwen3-0.6B + LoRA，跑在你这台 4GB 显卡上。三个标签页各管一件事，不用手输类型。</div>
+    <div class="sub">Qwen3-0.6B + LoRA，跑在你这台 4GB 显卡上。支持单条分析与 CSV/XLSX 批量任务。</div>
   </header>
 
   <div class="tabs">
     <button class="tab active" data-p="emotion">情绪分类</button>
     <button class="tab" data-p="newscat">新闻七分类</button>
     <button class="tab" data-p="entity">事件主体抽取</button>
+    <button class="tab" data-p="batch">批量任务</button>
   </div>
 
   <section class="panel active" id="p-emotion">
@@ -133,8 +151,40 @@ PAGE = r"""<!DOCTYPE html>
         <input type="text" id="ev-custom" placeholder="手填事件类型" style="display:none;width:190px">
         <button class="go" data-run="entity">抽取主体</button>
       </div>
-      <div class="row"><span class="hint">事件类型是模型的必需输入（训练数据里每条指令都带），选一个即可，不用打全称。</span></div>
+      <div class="row"><span class="hint">事件类型是模型的必需输入；没有适用类型时可选“无”，此时不执行抽取。</span></div>
       <div class="out" id="o-entity"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="p-batch">
+    <div class="card">
+      <div class="row">
+        <input type="file" id="batch-file" accept=".csv,.xlsx">
+        <button class="go" id="batch-select">选择 CSV/XLSX 文件</button>
+        <span class="file-name" id="batch-file-name">尚未选择文件</span>
+      </div>
+      <div class="row">
+        <label class="hint">批量任务</label>
+        <select id="batch-task">
+          <option value="emotion">情绪分类</option>
+          <option value="newscat">新闻七分类</option>
+          <option value="entity">事件主体抽取</option>
+        </select>
+        <label class="hint"><input type="checkbox" id="batch-header"> 首行是表头</label>
+      </div>
+      <div class="row" id="batch-event-row" style="display:none">
+        <label class="hint">事件类型</label>
+        <select id="batch-event"></select>
+        <input type="text" id="batch-event-custom" placeholder="手填事件类型" style="display:none">
+      </div>
+      <div class="row"><span class="hint">只读取第一列；输出为“数据内容 / 结果 / 判定”。结果固定保存到项目目录下的 batch_results，完成后显示完整路径。</span></div>
+      <div class="row"><button class="go" id="batch-upload">上传并开始</button></div>
+      <div class="err" id="batch-error"></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <b>任务列表</b>
+      <div class="hint" style="margin-top:5px">关闭页面不会停止后台任务；取消会在当前行推理结束后生效。</div>
+      <div id="batch-jobs"></div>
     </div>
   </section>
 
@@ -144,13 +194,22 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 const EVENTS = __EVENTS__;
 const sel = document.getElementById('ev');
-function fillEvents(){
-  EVENTS.forEach(e => { const o=document.createElement('option'); o.value=e; o.textContent=e; sel.appendChild(o); });
-  const o=document.createElement('option'); o.value='__custom__'; o.textContent='其它（手填）'; sel.appendChild(o);
+const batchSel = document.getElementById('batch-event');
+function fillEvents(select){
+  EVENTS.forEach(e => { const o=document.createElement('option'); o.value=e; o.textContent=e; select.appendChild(o); });
+  const noneOption=document.createElement('option'); noneOption.value='无'; noneOption.textContent='无（不适用/不确定）'; select.appendChild(noneOption);
+  const o=document.createElement('option'); o.value='__custom__'; o.textContent='其它（手填）'; select.appendChild(o);
 }
-fillEvents();
+fillEvents(sel);
+fillEvents(batchSel);
 sel.addEventListener('change', () => {
   document.getElementById('ev-custom').style.display = sel.value==='__custom__' ? 'inline-block' : 'none';
+});
+batchSel.addEventListener('change', () => {
+  document.getElementById('batch-event-custom').style.display = batchSel.value==='__custom__' ? 'inline-block' : 'none';
+});
+document.getElementById('batch-task').addEventListener('change', e => {
+  document.getElementById('batch-event-row').style.display = e.target.value==='entity' ? 'flex' : 'none';
 });
 
 document.querySelectorAll('.tab').forEach(btn => {
@@ -165,8 +224,10 @@ document.querySelectorAll('.tab').forEach(btn => {
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 function render(host, d){
-  const cls = d.decision === 'auto' ? 'b-auto' : (d.decision === 'hint' ? 'b-hint' : 'b-abstain');
-  const label = {auto:'有把握', hint:'建议核对', abstain:'拒答'}[d.decision] || d.decision;
+  const needsInput = d.status === 'need_input' || d.status === 'need_task';
+  const noEvent = d.status === 'no_event';
+  const cls = needsInput || noEvent || d.decision === 'hint' ? 'b-hint' : (d.decision === 'auto' ? 'b-auto' : 'b-abstain');
+  const label = noEvent ? '无适用事件' : (needsInput ? '需要补充' : ({auto:'有把握', hint:'建议核对', abstain:'拒答'}[d.decision] || d.decision));
   let html = `<span class="badge ${cls}">${label}</span>`;
   html += `<div class="ans">${esc(d.answer)}</div>`;
   html += `<div class="meta">置信 ${(d.confidence*100).toFixed(0)}% · ${d.latency_ms} ms · 任务 ${d.task}</div>`;
@@ -214,6 +275,100 @@ document.querySelectorAll('button[data-run]').forEach(btn => {
   btn.addEventListener('click', () => runTask(btn.dataset.run, btn));
 });
 
+let batchFile = null;
+document.getElementById('batch-select').addEventListener('click', () => document.getElementById('batch-file').click());
+document.getElementById('batch-file').addEventListener('change', e => {
+  batchFile = e.target.files[0] || null;
+  document.getElementById('batch-file-name').textContent = batchFile ? `${batchFile.name} · ${(batchFile.size/1024/1024).toFixed(2)} MB` : '尚未选择文件';
+});
+
+document.getElementById('batch-upload').addEventListener('click', async () => {
+  const err = document.getElementById('batch-error');
+  err.textContent = '';
+  if (!batchFile){ err.textContent = '请先选择 CSV 或 XLSX 文件'; return; }
+  const task = document.getElementById('batch-task').value;
+  let eventType = '';
+  if (task === 'entity'){
+    eventType = batchSel.value;
+    if (eventType === '__custom__') eventType = document.getElementById('batch-event-custom').value.trim();
+    if (!eventType){ err.textContent = '实体任务必须选择事件类型；不适用时请选择“无”'; return; }
+  }
+  const query = new URLSearchParams({
+    task, event_type: eventType, filename: batchFile.name,
+    first_row_header: document.getElementById('batch-header').checked ? '1' : '0'
+  });
+  const btn = document.getElementById('batch-upload');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/batch/jobs?' + query.toString(), {
+      method:'POST', body:batchFile, headers:{'Content-Type':'application/octet-stream'}
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || '上传失败');
+    await loadJobs();
+  }catch(e){ err.textContent = e.message; }
+  finally{ btn.disabled = false; }
+});
+
+function formatEta(seconds){
+  if (seconds === null || seconds === undefined) return '估算中';
+  if (seconds >= 3600) return `${Math.floor(seconds/3600)}小时${Math.round(seconds%3600/60)}分钟`;
+  if (seconds >= 60) return `${Math.ceil(seconds/60)}分钟`;
+  return `${seconds}秒`;
+}
+
+async function loadJobs(){
+  const host = document.getElementById('batch-jobs');
+  try {
+    const r = await fetch('/api/batch/jobs');
+    const jobs = await r.json();
+    if (!r.ok) throw new Error(jobs.error || '任务读取失败');
+    const names = {emotion:'情绪分类', newscat:'新闻七分类', entity:'主体抽取'};
+    host.innerHTML = jobs.length ? jobs.map(j => {
+      const total = j.total || 0, done = j.processed || 0;
+      const percent = total ? Math.min(100, done/total*100) : 0;
+      const counts = j.counts || {};
+      let actions = '';
+      if (['running','scanning','queued'].includes(j.status)) actions += `<button data-action="cancel" data-id="${j.id}">取消</button>`;
+      if (['cancelled','interrupted','failed'].includes(j.status)) actions += `<button data-action="resume" data-id="${j.id}">续跑</button>`;
+      if (j.result_available){
+        actions += `<a href="/api/batch/jobs/${j.id}/download">下载结果</a>`;
+        actions += `<button data-action="copy" data-id="${j.id}">复制保存路径</button>`;
+        actions += `<button data-action="reveal" data-id="${j.id}">打开所在文件夹</button>`;
+      }
+      return `<div class="job">
+        <div class="job-title">${esc(j.original_filename)} · ${esc(names[j.task] || j.task)}</div>
+        <div class="progress"><span style="width:${percent.toFixed(2)}%"></span></div>
+        <div class="counts">状态 ${esc(j.status)} · ${done}/${total} 条（${percent.toFixed(1)}%） · 速度 ${j.rows_per_second || 0} 条/秒 · 预计剩余 ${formatEta(j.eta_seconds)}<br>
+        有把握 ${counts['有把握'] || 0} · 建议核对 ${counts['建议核对'] || 0} · 拒答 ${counts['拒答'] || 0} · 处理失败 ${counts['处理失败'] || 0}</div>
+        ${j.error ? `<div class="err">${esc(j.error)}</div>` : ''}
+        <div class="output-path">保存位置：${esc(j.output_path || '尚未生成')}</div>
+        <div class="job-actions">${actions}</div>
+      </div>`;
+    }).join('') : '<div class="hint" style="margin-top:12px">还没有批量任务</div>';
+  }catch(e){ host.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+async function batchAction(id, action){
+  if (action === 'copy'){
+    const r = await fetch('/api/batch/jobs/' + id);
+    const j = await r.json();
+    await navigator.clipboard.writeText(j.output_path);
+    return;
+  }
+  const r = await fetch(`/api/batch/jobs/${id}/${action}`, {method:'POST'});
+  const d = await r.json();
+  if (!r.ok) alert(d.error || '操作失败');
+  await loadJobs();
+}
+
+document.getElementById('batch-jobs').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-action]');
+  if (btn) batchAction(btn.dataset.id, btn.dataset.action).catch(e => alert(e.message));
+});
+loadJobs();
+setInterval(loadJobs, 2000);
+
 // 截图/演示模式：?demo=emotion|newscat|entity，自动填样例并真实调一次接口
 const DEMO_TEXT = {
   emotion: '公司发布业绩预告，预计净利润同比增长120%，远超市场预期。',
@@ -245,23 +400,87 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_file(self, path):
+        path = Path(path)
+        ctype = "text/csv; charset=utf-8" if path.suffix == ".csv" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(path.stat().st_size))
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(path.name)}")
+        self.end_headers()
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(64 * 1024)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
     def do_GET(self):
-        path = self.path.split("?", 1)[0]      # 去掉 ?demo=xxx 这类查询串
+        path = urlparse(self.path).path
         if path in ("/", "/index.html"):
             page = PAGE.replace("__EVENTS__", json.dumps(EVENT_TYPES, ensure_ascii=False))
             self._send(200, page, "text/html; charset=utf-8")
-        elif path == "/api/health":
-            self._send(200, json.dumps({"ok": H is not None}))
-        else:
-            self._send(404, json.dumps({"error": "not found"}))
+            return
+        if path == "/api/health":
+            self._send(200, json.dumps({"ok": H is not None, "batch": BATCH is not None}))
+            return
+        if path == "/api/batch/jobs":
+            self._send(200, json.dumps(BATCH.list_jobs(), ensure_ascii=False))
+            return
+        if path == "/api/batch/config":
+            self._send(200, json.dumps({"results_root": str(BATCH.results_root),
+                                        "max_upload_bytes": BATCH.max_upload_bytes}, ensure_ascii=False))
+            return
+        match = re.fullmatch(r"/api/batch/jobs/([0-9a-f]{32})", path)
+        if match:
+            self._send(200, json.dumps(BATCH.get_job(match.group(1)), ensure_ascii=False))
+            return
+        match = re.fullmatch(r"/api/batch/jobs/([0-9a-f]{32})/download", path)
+        if match:
+            try:
+                self._send_file(BATCH.result_path(match.group(1)))
+            except (KeyError, FileNotFoundError, ValueError) as e:
+                self._send(404, json.dumps({"error": str(e)}, ensure_ascii=False))
+            return
+        self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        path = self.path.split("?", 1)[0]
+        path = urlparse(self.path).path
         if not path.startswith("/api/"):
             self._send(404, json.dumps({"error": "not found"}))
             return
-        task = path.split("/")[-1]
         try:
+            if path == "/api/batch/jobs":
+                params = parse_qs(urlparse(self.path).query)
+                size = int(self.headers.get("Content-Length", 0))
+                if size <= 0:
+                    raise ValueError("上传内容为空")
+                if size > BATCH.max_upload_bytes:
+                    self.close_connection = True
+                    raise ValueError("文件超过上传大小上限")
+                job = BATCH.create_job(
+                    self.rfile,
+                    params.get("filename", [""])[0],
+                    params.get("task", [""])[0],
+                    params.get("event_type", [None])[0],
+                    params.get("first_row_header", ["0"])[0] == "1",
+                    content_length=size,
+                )
+                self._send(201, json.dumps(job, ensure_ascii=False))
+                return
+            match = re.fullmatch(r"/api/batch/jobs/([0-9a-f]{32})/(cancel|resume|reveal)", path)
+            if match:
+                job_id, action = match.groups()
+                if action == "cancel":
+                    result = BATCH.cancel_job(job_id)
+                elif action == "resume":
+                    result = BATCH.resume_job(job_id)
+                else:
+                    result = {"output_path": BATCH.reveal_result(job_id)}
+                self._send(200, json.dumps(result, ensure_ascii=False))
+                return
+
+            task = path.split("/")[-1]
             n = int(self.headers.get("Content-Length", 0))
             payload = json.loads(self.rfile.read(n) or b"{}")
             text = (payload.get("text") or "").strip()
@@ -271,24 +490,20 @@ class Handler(BaseHTTPRequestHandler):
             if task not in ("emotion", "newscat", "entity"):
                 self._send(400, json.dumps({"error": "未知任务"}, ensure_ascii=False))
                 return
-
-            instr = None
-            if task == "entity":
-                ev = (payload.get("event") or "").strip()
-                if ev:
-                    instr = f"分析以下新闻，抽取{ev}事件相关的主体信息。"
-
+            event_type = (payload.get("event") or "").strip() if task == "entity" else None
             t0 = time.time()
             with LOCK:
-                res = H.answer(text, task_hint=task, instruction=instr)
+                res = H.answer(text, task_hint=task, event_type=event_type)
             res["wall_ms"] = int((time.time() - t0) * 1000)
             self._send(200, json.dumps(res, ensure_ascii=False))
+        except (ValueError, KeyError, FileNotFoundError) as e:
+            self._send(400, json.dumps({"error": str(e)}, ensure_ascii=False))
         except Exception as e:
             self._send(500, json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
 
 
 def main():
-    global H
+    global H, BATCH
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=7860)
@@ -296,7 +511,9 @@ def main():
 
     print("[1/2] 加载模型（约 15 秒）…")
     H = Harness()
+    BATCH = BatchManager(H, LOCK)
     print(f"[2/2] 服务已启动：http://{args.host}:{args.port}")
+    print(f"      批量结果保存：{BATCH.results_root}")
     print("      按 Ctrl+C 停止")
 
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
@@ -304,6 +521,7 @@ def main():
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\n已停止")
+        BATCH.shutdown()
         srv.shutdown()
 
 

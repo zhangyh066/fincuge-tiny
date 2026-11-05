@@ -11,8 +11,9 @@
     3. 每次输出都能从日志复原走哪一步
 
 用法：
-    python harness.py "这家公司业绩暴雷，股价要崩"          # 自动路由
-    python harness.py "某某公司被查" --task entity          # 强制任务
+    python harness.py "这家公司业绩暴雷，股价要崩" --task emotion
+    python harness.py "某某公司被查" --task entity --event-type 信批违规
+    python harness.py "正文" --route-text "判断这段话的情绪"  # 路由意图不进入模型正文
     python harness.py "..." --instruction "分析以下新闻，抽取信批违规事件相关的主体信息。"
     python harness.py --selftest --n 50                     # 和已有评估缓存逐条比对
 """
@@ -23,6 +24,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from collections import Counter
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -42,13 +44,14 @@ TRACE = "D:/ai/logs/harness_trace.jsonl"
 # 真实新闻可能长得多，静默超长会直接掉准确率）
 MAX_INPUT_TOKENS = 448
 
-# 自一致性投票：实体任务专用。贪婪解置信度低于这个值就再采样 2 次投票。
-# 200 条实测：阈值 0.88 → 触发 33%、89.0%→91.0%、平均生成次数 1.66 倍；
+# 自一致性投票：实体任务专用。低置信时在贪婪解之外再独立采样 3 次。
+# 200 条实测：阈值 0.88 → 触发 33%、89.0%→91.0%；触发请求的生成次数为 4 次。
 # 阈值 0.89 触发 52% 但收益一样，所以取 0.88。
 VOTE_IF_BELOW = 0.88
 VOTE_K = 3
 VOTE_TEMP = 0.7
 VOTE_TOP_P = 0.9
+PROMPT_VERSION = "build_user_text_v1"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -66,6 +69,17 @@ def resolve_adapter(task, primary):
         if os.path.exists(os.path.join(p, "adapter_config.json")):
             return p
     return primary
+
+
+def adapter_version(path):
+    model_path = os.path.join(path, "adapter_model.safetensors")
+    if not os.path.exists(model_path):
+        return "unknown"
+    digest = hashlib.sha256()
+    with open(model_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:16]
 
 EVAL_FILES = {
     "emotion": "D:/ai/data/fincuge/emotion_eval.json",
@@ -92,8 +106,8 @@ NEWS_ALIAS = {
 # ── 每个技能的配置。instruction 从训练数据里取最常见的那一条，逐字节固定 ──
 #   情绪训练集有 9 种指令（每种约 1800 条），取最常见的；
 #   新闻只有 1 种指令，直接用；
-#   实体有 121 种、且都带「事件类型」——真实使用时必须由用户提供，否则是分布外输入，
-#   这里放一个通用兜底并在结果里打 flag=instruction_synthesized。
+#   实体有 121 种、且都带「事件类型」——真实使用时必须由用户提供，否则在推理前返回 need_input。
+#   配置里的通用 instruction 只供已有评估行等内部路径使用，不作为线上缺参兜底。
 SKILLS = {
     "emotion": {
         "adapter": "weights/emotion",
@@ -182,9 +196,10 @@ class Harness:
         base = AutoModelForCausalLM.from_pretrained(
             BASE, dtype=torch.float16, device_map={"": device}, trust_remote_code=True
         )
-        # 三个 adapter 全部挂上（LoRA 权重每个约 10MB，4GB 卡装得下），按请求切换
+        # 三个 adapter 全部挂上（LoRA 权重每个约 20MB，4GB 卡装得下），按请求切换
         names = list(SKILLS)
         self.paths = {n: resolve_adapter(n, SKILLS[n]["adapter"]) for n in names}
+        self.versions = {n: adapter_version(self.paths[n]) for n in names}
         self.model = PeftModel.from_pretrained(base, self.paths[names[0]],
                                               adapter_name=names[0])
         for n in names[1:]:
@@ -247,11 +262,7 @@ class Harness:
         return text, conf
 
     def _generate_vote(self, row, max_new, k=None):
-        """采样 k 次、按抽出的实体多数投票。返回 (实体, 一致度, 最后一次原始输出)
-
-        置信度用"一致度"（k 次里几次给出同一个实体），而不是 token 概率：
-        3 次全一致 = 1.0，2 次一致 = 0.67，全不同 = 0.33。
-        """
+        """在贪婪解之外采样 k 次，返回获选实体及其对应的原始输出和票明细。"""
         k = k or VOTE_K
         texts, ents = [], []
         for _ in range(k):
@@ -264,15 +275,19 @@ class Harness:
             t = self.tok.decode(out[0][ids.shape[1]:], skip_special_tokens=True).strip()
             texts.append(t)
             ents.append(extract_entity(t))
-        top, cnt = Counter(ents).most_common(1)[0]
-        return top, cnt / k, texts[-1]
+        counts = Counter(ents)
+        top, cnt = counts.most_common(1)[0]
+        winning_raw = next(t for t, ent in zip(texts, ents) if ent == top)
+        detail = {
+            "samples": [{"entity": ent, "raw": t[:120]} for t, ent in zip(texts, ents)],
+            "votes": dict(counts),
+        }
+        return top, cnt / k, winning_raw, detail
 
     # ---------- 校验层 ----------
     # 拦截项（必须拒答）：答案根本不成立
     # 提醒项（不拒答，但把 auto 降级成 hint）：可能有瑕疵，值得人看一眼
     BLOCKING = {"label_illegal", "entity_empty", "entity_not_in_text"}
-    # 只有"内容层面"的提醒才降级；threshold_uncalibrated / instruction_synthesized
-    # 属于元信息，不该让每一次回答都退化成 hint（否则这两个任务永远进不了 auto）
     DOWNGRADE = {"format_multiline", "entity_length", "entity_punct", "entity_multiple"}
 
     def _validate(self, task, answer, row, raw):
@@ -304,114 +319,198 @@ class Harness:
         return ok, flags
 
     # ---------- 主入口 ----------
-    def answer(self, text=None, task_hint=None, row=None, instruction=None):
+    def answer(self, text=None, task_hint=None, row=None, instruction=None,
+               event_type=None, route_text=None):
         t0 = time.time()
         truncated = False
+        if task_hint is not None and task_hint not in SKILLS:
+            return self._reject("task_illegal", t0, task_hint, 0.0,
+                                "不支持的任务，请选择 emotion/newscat/entity",
+                                status="unsupported", missing=["task"], body=text)
         if row is None:
             body = clean_input(text)
+            if not body:
+                return self._reject("empty_input", t0, None, 0.0, "输入为空",
+                                    missing=["text"], body=body)
             n_tok = len(self.tok.encode(body, add_special_tokens=False))
             if n_tok > MAX_INPUT_TOKENS:
                 ids = self.tok.encode(body, add_special_tokens=False)[:MAX_INPUT_TOKENS]
                 body = self.tok.decode(ids, skip_special_tokens=True)
                 truncated = True
-            if not body:
-                return self._reject("empty_input", t0, None, 0.0, "输入为空")
-            task, rconf, reason = (task_hint, 1.0, "上游指定任务") if task_hint else route(body)
+            if task_hint:
+                task, rconf, reason = task_hint, 1.0, "上游指定任务"
+                task_source = "task_hint"
+            else:
+                route_body = clean_input(route_text) if route_text is not None else body
+                task, rconf, reason = route(route_body)
+                task_source = "keyword"
             if task is None:
                 return self._reject("no_route", t0, None, 0.0,
-                                    "看不出你想做哪件事（情绪/新闻分类/抽主体），请说明")
+                                    "看不出你想做哪件事（情绪/新闻分类/抽主体），请说明",
+                                    status="need_task", missing=["task"], body=body)
             cfg = SKILLS[task]
-            ins = instruction or cfg["instruction"]
+            if instruction:
+                ins = instruction
+                instruction_source = "manual"
+            elif task == "entity":
+                event_type = clean_input(event_type)
+                if event_type == "无":
+                    return self._reject("no_applicable_event", t0, task, 0.0, "无",
+                                        status="no_event", body=body)
+                if not event_type:
+                    return self._reject("missing_event_type", t0, task, 0.0,
+                                        "请先指定事件类型，例如信批违规或涉嫌非法集资",
+                                        missing=["event_type"], body=body)
+                ins = f"分析以下新闻，抽取{event_type}事件相关的主体信息。"
+                instruction_source = "event_type"
+            else:
+                ins = cfg["instruction"]
+                instruction_source = "skill_default"
             row = {"instruction": ins, "input": body}
-            synthesized = instruction is None and task == "entity"
         else:
             body = str(row.get("input", ""))
             task, rconf, reason = (task_hint, 1.0, "评估模式指定任务") if task_hint else route(body)
             task = task or "emotion"
-            synthesized = False
+            task_source = "evaluation"
+            instruction_source = "evaluation"
 
         cfg = SKILLS[task]
-        self._use(task)
         voted = False
+        vote_detail = None
+        token_confidence = None
+        generation_count = 0
+        t_infer = time.time()
+        self._use(task)
 
         with torch.inference_mode():
             if cfg["mode"] == "restricted":
                 pred, conf, detail = self._emotion(row)
                 raw = pred
+                confidence_kind = "restricted_softmax"
             else:
+                generation_count = 1
                 raw, conf = self._generate(row, cfg["max_new"])
+                token_confidence = conf
+                confidence_kind = "token_geomean"
                 if task == "newscat":
                     pred = parse_news(raw)
                     if pred is None:
                         pred = raw[:10]
                 else:
                     pred = extract_entity(raw)
-                    # 自一致性投票：只在实体任务、且贪婪解置信度偏低时触发。
-                    # 实测 200 条：阈值 0.88 时触发 33%、准确率 89.0%→91.0%，成本 1.66 倍
                     if conf < VOTE_IF_BELOW:
-                        v_pred, v_conf, v_raw = self._generate_vote(row, cfg["max_new"])
+                        vote_detail = {
+                            "triggered": True,
+                            "greedy_entity": pred,
+                            "greedy_confidence": round(float(conf), 4),
+                        }
+                        v_pred, v_conf, v_raw, v_detail = self._generate_vote(row, cfg["max_new"])
+                        generation_count += VOTE_K
+                        vote_detail.update(v_detail)
+                        vote_detail["selected_entity"] = v_pred or pred
+                        vote_detail["selection_source"] = "sample_vote" if v_pred else "greedy"
                         if v_pred:
                             pred, conf, raw = v_pred, v_conf, v_raw
+                            confidence_kind = "vote_agreement"
                             voted = True
                 detail = {}
+        inference_ms = int((time.time() - t_infer) * 1000)
 
         ok, flags = self._validate(task, pred, row, raw)
+        if vote_detail is not None:
+            flags.append("vote_triggered")
         if voted:
             flags.append("voted")
         if truncated:
             flags.append("input_truncated")
-        if synthesized:
-            flags.append("instruction_synthesized")
         if not cfg["calibrated"]:
             flags.append("threshold_uncalibrated")
 
-        # [5] 三档判定：拦截项 → 拒答；有提醒项 → 最高只到"提示存疑"
-        # 注意：投票后的 confidence 是"一致度"（1.0 / 0.67 / 0.33），
-        # 和 token 概率不是一个尺度，不能拿 hi/lo 去比，所以单独一套规则。
+        # 投票一致度尚未独立标定；即使三次一致，最高也只给 hint。
         if not ok:
-            decision = "abstain"
+            decision, decision_reason = "abstain", "validation_failed"
         elif voted:
-            if conf >= 1.0:
-                decision = "hint" if any(f in self.DOWNGRADE for f in flags) else "auto"
-            elif conf >= 0.66:
-                decision = "hint"
+            if conf >= 0.66:
+                decision, decision_reason = "hint", "vote_agreement_uncalibrated"
             else:
-                decision = "abstain"
+                decision, decision_reason = "abstain", "vote_disagreement"
         elif conf >= cfg["hi"]:
-            decision = "hint" if any(f in self.DOWNGRADE for f in flags) else "auto"
+            if any(f in self.DOWNGRADE for f in flags):
+                decision, decision_reason = "hint", "downgrade_flags"
+            else:
+                decision, decision_reason = "auto", "high_confidence"
         elif conf >= cfg["lo"]:
-            decision = "hint"
+            decision, decision_reason = "hint", "medium_confidence"
         else:
-            decision = "abstain"
+            decision, decision_reason = "abstain", "low_confidence"
 
         res = {
+            "status": "completed",
+            "missing": [],
             "task": task,
             "schema_valid": ok,
             "answer": pred if ok else "我不确定",
             "raw": raw[:120],
             "confidence": round(float(conf), 4),
+            "confidence_kind": confidence_kind,
+            "token_confidence": round(float(token_confidence), 4) if token_confidence is not None else None,
             "decision": decision,
+            "decision_reason": decision_reason,
             "flags": flags,
-            "route": {"conf": rconf, "reason": reason},
+            "route": {"conf": rconf, "reason": reason, "source": task_source},
             "probs": {k: round(v, 4) for k, v in detail.items()} if detail else None,
-            "attempts": 1,
+            "vote": vote_detail,
+            "attempts": max(1, generation_count),
+            "generation_count": generation_count,
+            "adapter_version": getattr(self, "versions", {}).get(task, "unknown"),
+            "prompt_version": PROMPT_VERSION,
+            "instruction_source": instruction_source,
+            "instruction_hash": hashlib.sha256(str(row.get("instruction", "")).encode("utf-8")).hexdigest()[:16],
+            "inference_ms": inference_ms,
             "latency_ms": int((time.time() - t0) * 1000),
+            "request_id": uuid.uuid4().hex,
             "trace_id": hashlib.md5((body or "")[:200].encode("utf-8")).hexdigest()[:8],
         }
         self._log(res, body)
         return res
 
-    def _reject(self, why, t0, task, conf, msg):
-        res = {"task": task, "answer": msg, "raw": "", "confidence": conf,
-               "decision": "abstain", "flags": [why], "route": {"conf": 0.0, "reason": why},
-               "probs": None, "attempts": 0,
-               "latency_ms": int((time.time() - t0) * 1000), "trace_id": "-"}
-        self._log(res, "")
+    def _reject(self, why, t0, task, conf, msg, status="need_input", missing=None, body=""):
+        res = {
+            "status": status,
+            "missing": missing or [],
+            "task": task,
+            "schema_valid": None,
+            "answer": msg,
+            "raw": "",
+            "confidence": conf,
+            "confidence_kind": "none",
+            "token_confidence": None,
+            "decision": "abstain",
+            "decision_reason": why,
+            "flags": [why],
+            "route": {"conf": 0.0, "reason": why, "source": "none"},
+            "probs": None,
+            "vote": None,
+            "attempts": 0,
+            "generation_count": 0,
+            "adapter_version": None,
+            "prompt_version": PROMPT_VERSION,
+            "instruction_source": None,
+            "instruction_hash": None,
+            "inference_ms": 0,
+            "latency_ms": int((time.time() - t0) * 1000),
+            "request_id": uuid.uuid4().hex,
+            "trace_id": hashlib.md5(str(body or "")[:200].encode("utf-8")).hexdigest()[:8],
+        }
+        self._log(res, body)
         return res
 
     def _log(self, res, body):
         """[6] 单行结构化日志，任何一次输出都能复原走哪一步"""
-        rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "input_len": len(body or ""),
+        rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+               "input_len": len(body or ""),
+               "input_hash": hashlib.sha256(str(body or "").encode("utf-8")).hexdigest(),
+               "base_model": BASE,
                **res}
         try:
             with open(TRACE, "a", encoding="utf-8") as f:
@@ -588,18 +687,17 @@ def chat():
 
         # 实体任务先问事件类型，否则是分布外输入
         use_instr = instr
+        event_type = None
         if task is None:
             guess, _, _ = route(line)
         else:
             guess = task
         if guess == "entity" and not use_instr:
-            ev = input("  这是哪类事件？（如 信批违规 / 涉嫌非法集资 / 资金账户风险 / 高管负面，直接回车跳过）> ").strip()
-            if ev:
-                use_instr = f"分析以下新闻，抽取{ev}事件相关的主体信息。"
+            event_type = input("  这是哪类事件？（如 信批违规 / 涉嫌非法集资 / 资金账户风险 / 高管负面，必填）> ").strip()
 
-        r = h.answer(line, task_hint=task, instruction=use_instr)
-        print(f"  任务 {r['task']}   答案 {r['answer']!r}   置信 {r['confidence']:.2f}   "
-              f"{r['decision']}   {r['latency_ms']}ms")
+        r = h.answer(line, task_hint=task, instruction=use_instr, event_type=event_type)
+        print(f"  状态 {r['status']}   任务 {r['task']}   答案 {r['answer']!r}   "
+              f"置信 {r['confidence']:.2f}   {r['decision']}   {r['latency_ms']}ms")
         if r.get("probs"):
             print(f"  三类概率 {r['probs']}")
         if r["flags"]:
@@ -612,6 +710,8 @@ def main():
     ap.add_argument("text", nargs="?", default="")
     ap.add_argument("--task", default=None, choices=list(SKILLS))
     ap.add_argument("--instruction", default=None)
+    ap.add_argument("--event-type", default=None, help="实体任务的事件类型；与 --instruction 二选一")
+    ap.add_argument("--route-text", default=None, help="只用于路由的意图文本，不进入模型正文")
     ap.add_argument("--chat", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--calibrate", default=None, choices=list(SKILLS))
@@ -629,11 +729,12 @@ def main():
         selftest(args.n)
         return
     if not args.text:
-        print("用法: python harness.py \"你的文本\" [--task emotion|newscat|entity]")
+        print("用法: python harness.py \"你的文本\" [--task emotion|newscat|entity] [--event-type 事件类型]")
         return
 
     h = Harness()
-    res = h.answer(args.text, task_hint=args.task, instruction=args.instruction)
+    res = h.answer(args.text, task_hint=args.task, instruction=args.instruction,
+                   event_type=args.event_type, route_text=args.route_text)
     print(json.dumps(res, ensure_ascii=False, indent=2))
 
 
